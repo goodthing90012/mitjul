@@ -93,6 +93,9 @@ export function guessPage(words, H) {
 
 // 선택된 단어들을 문장으로 합치기
 // 한글은 인식기가 글자 단위로 쪼개는 경우가 많아서, 실제 간격이 좁으면 붙이고 넓으면 띄움
+// 낱말 끝에 자주 오는 글자(조사·어미). 줄 끝 글자가 이 중 하나면 낱말이 끝난 것으로 보고 띄움
+export const WORD_END = /[다요고는은을를이가에의도로서며면지게와과께만나데니네죠군걸것듯랑한할된될던운울인일적들럼야여아어든록]/;
+
 export function joinWords(words) {
   let out = '';
   let prev = null;
@@ -104,7 +107,15 @@ export function joinWords(words) {
       const wc = (w.bbox.y0 + w.bbox.y1) / 2;
       const sameLine = Math.abs(wc - pc) < h * 0.6 && w.bbox.x0 > prev.bbox.x0;
       const gap = w.bbox.x0 - prev.bbox.x1;
-      if (!sameLine || gap > h * 0.28) out += ' ';
+      if (sameLine) {
+        if (gap > h * 0.28) out += ' ';
+      } else {
+        // 다음 줄로 넘어갈 때: 한글 책은 낱말 중간에서도 줄이 바뀜 ("그\n런") → 줄 끝이 낱말 끝 글자가 아니면 붙임
+        const last = out.slice(-1);
+        const first = w.text[0] || '';
+        const hangul = /[가-힣]/;
+        if (!(hangul.test(last) && hangul.test(first) && !WORD_END.test(last))) out += ' ';
+      }
     }
     out += w.text;
     prev = w;

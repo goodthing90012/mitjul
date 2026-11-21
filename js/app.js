@@ -2,11 +2,11 @@
 import { db, uid } from './db.js';
 import { lookupISBN, searchTitle, cleanISBN, isISBN13, getKakaoKey } from './bookapi.js';
 import { startScan, decodeImageFile } from './scanner.js';
-import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, fitForOcr, joinWords } from './ocr.js';
+import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, fitForOcr, joinWords, WORD_END } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -692,8 +692,6 @@ async function afterChange() {
 
 /* ================= 글귀 ================= */
 // 폰(구글 렌즈·갤러리 글자 인식·라이브 텍스트)에서 복사한 글을 정리: 줄바꿈 합치고, 혼자 있는 숫자 줄은 쪽수로
-// 낱말 끝에 자주 오는 글자(조사·어미). 줄 끝 글자가 이 중 하나면 낱말이 끝난 것으로 보고 띄움
-const WORD_END = /[다요고는은을를이가에의도로서며면지게와과께만나데니네죠군걸것듯랑한할된될던운울인일적들럼야여아어며든도록]/;
 function cleanPasted(raw) {
   const lines = String(raw || '').replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
   let page = 0;
