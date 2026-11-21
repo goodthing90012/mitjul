@@ -6,7 +6,7 @@ import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -954,7 +954,20 @@ function settingsSheet() {
     <h4 class="sec">백업</h4>
     <p class="hint">기록은 이 기기의 브라우저에만 저장돼요. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 꼭 내보내 두세요.</p>
     <div class="btn-row"><button class="ghost" id="bExport">내보내기</button><label class="ghost">불러오기<input type="file" accept="application/json,.json" id="bImport" hidden></label></div>
+    <h4 class="sec">앱 업데이트</h4>
+    <p class="hint">새 버전을 올렸는데 화면이 그대로면 눌러주세요. 기록은 지워지지 않아요.</p>
+    <button class="ghost wide" id="appReload">새로고침</button>
     <p class="muted center">밑줄서재 v${APP_VERSION}</p>`);
+  $('#appReload', body).onclick = async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = '새 버전 받는 중…';
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      await reg?.update();
+      if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    } catch {}
+    location.reload();
+  };
   $('#kSave', body).onclick = () => {
     try { localStorage.setItem('kakaoKey', $('#kKey', body).value.trim()); } catch {}
     toast('저장했어요');
