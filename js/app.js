@@ -6,7 +6,7 @@ import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.0.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -986,6 +986,10 @@ function settingsSheet() {
     e.target.disabled = true;
     e.target.textContent = '새 버전 받는 중…';
     try {
+      // 브라우저 HTTP 캐시까지 새로 받기
+      const files = ['./', './index.html', './style.css', './sw.js', './manifest.webmanifest',
+        ...['app', 'db', 'bookapi', 'scanner', 'ocr', 'graph', 'shelf3d'].map((n) => `./js/${n}.js`)];
+      await Promise.all(files.map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
       const reg = await navigator.serviceWorker?.getRegistration();
       await reg?.update();
       if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
@@ -1051,7 +1055,7 @@ async function init() {
   await reloadShelf();
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
   }
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 }

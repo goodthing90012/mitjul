@@ -1,5 +1,5 @@
 // 밑줄서재 서비스워커 — 업데이트할 때마다 VERSION을 올려주세요
-const VERSION = 'mitjul-v3';
+const VERSION = 'mitjul-v4';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/bookapi.js', './js/scanner.js', './js/ocr.js', './js/graph.js', './js/shelf3d.js',
@@ -9,7 +9,7 @@ const CDN = /^https:\/\/(cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstati
 const NO_CACHE = /^https:\/\/(www\.googleapis\.com|dapi\.kakao\.com)\//;
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
@@ -20,7 +20,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin === location.origin) {
     // 앱 파일: 네트워크 우선, 오프라인이면 캐시
-    e.respondWith(fetch(req).then((res) => {
+    // cache:'no-cache' → GitHub Pages의 10분 HTTP 캐시를 건너뛰고 항상 새 파일 확인
+    e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then((res) => {
       const copy = res.clone();
       caches.open(VERSION).then((c) => c.put(req, copy));
       return res;
