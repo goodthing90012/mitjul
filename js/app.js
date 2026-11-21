@@ -6,7 +6,7 @@ import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, 
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -436,7 +436,7 @@ function renderPanel() {
   // 아래 버튼은 패널 밖(화면 고정)에 두어 스크롤·전체 화면 전환과 상관없이 항상 바닥에 붙어 있게
   $('#bpActions').innerHTML = state.tab === 'quotes'
     ? `<button class="primary" id="addQuote">＋ 밑줄 긋기</button><button class="ghost" id="addMark">🔖 책갈피</button>`
-    : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button>`;
+    : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button><button class="ghost" id="addFamily">👪 가족</button>`;
 
   const panel = $('#bookPanel');
   bindDrag($('#bpDrag'), panel, (dy, v) => {
@@ -461,6 +461,7 @@ function renderPanel() {
   } else {
     $('#addPerson').onclick = () => personSheet();
     $('#addRel').onclick = () => relationSheet();
+    $('#addFamily').onclick = () => familySheet();
     renderPeople();
   }
 }
@@ -687,10 +688,14 @@ function relationSheet(r) {
   const opts = (sel) => people.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
   const body = openSheet(`
     <h3>${isNew ? '관계 추가' : '관계 편집'}</h3>
-    <div class="grid2">
+    ${isNew ? `
+      <label>누구와<select id="rA">${opts(r.from)}</select></label>
+      <div class="field-title">누구누구 <small>여러 명 골라도 돼요 · 같은 관계로 한 번에 이어져요</small></div>
+      <div class="pchips" id="rBs"></div>`
+    : `<div class="grid2">
       <label>인물 A<select id="rA">${opts(r.from)}</select></label>
       <label>인물 B<select id="rB">${opts(r.to)}</select></label>
-    </div>
+    </div>`}
     <label>종류<div class="seg" id="rKind">${Object.entries(REL_KINDS).map(([k, v]) => `<button type="button" data-k="${k}" class="${k === r.kind ? 'on' : ''}" style="--rc:${v.color}">${v.label}</button>`).join('')}</div></label>
     <div class="grid2">
       <label>관계 이름<input id="rLabel" value="${esc(r.label)}" placeholder="예: 남매, 약혼, 하녀"></label>
@@ -699,12 +704,31 @@ function relationSheet(r) {
     <p class="hint">같은 두 사람이라도 쪽마다 관계를 따로 적으면(친구 → 부부) 슬라이더에 따라 바뀌어 보여요.</p>
     <div class="btn-row">${isNew ? '' : '<button class="danger" id="rDel">삭제</button>'}<button class="primary" id="rSave">저장</button></div>`);
   $$('#rKind button', body).forEach((b) => (b.onclick = () => { $$('#rKind button', body).forEach((x) => x.classList.remove('on')); b.classList.add('on'); r.kind = b.dataset.k; }));
+  const picked = new Set();
+  const drawChips = () => {
+    const a = $('#rA', body).value;
+    [...picked].forEach((id) => { if (id === a) picked.delete(id); });
+    $('#rBs', body).innerHTML = people.filter((p) => p.id !== a).map((p) => `<button type="button" class="pchip ${picked.has(p.id) ? 'on' : ''}" data-id="${p.id}"><i style="background:${familyColor(p.family)}"></i>${esc(p.name)}</button>`).join('');
+    $$('#rBs .pchip', body).forEach((c) => (c.onclick = () => { picked.has(c.dataset.id) ? picked.delete(c.dataset.id) : picked.add(c.dataset.id); drawChips(); }));
+  };
+  if (isNew) { drawChips(); $('#rA', body).onchange = drawChips; }
   $('#rSave', body).onclick = async () => {
-    r.from = $('#rA', body).value; r.to = $('#rB', body).value;
-    if (r.from === r.to) { toast('서로 다른 두 사람을 골라주세요'); return; }
-    r.label = $('#rLabel', body).value.trim();
-    r.page = +$('#rPage', body).value || 0;
-    await db.put('relations', r);
+    const label = $('#rLabel', body).value.trim();
+    const page = +$('#rPage', body).value || 0;
+    if (isNew) {
+      if (!picked.size) { toast('이어줄 인물을 한 명 이상 골라주세요'); return; }
+      const from = $('#rA', body).value;
+      let i = 0;
+      for (const to of picked) {
+        await db.put('relations', { id: uid(), bookId: r.bookId, from, to, kind: r.kind, label, page, createdAt: Date.now() + i++ });
+      }
+      if (picked.size > 1) toast(`${picked.size}명과 한 번에 이었어요`);
+    } else {
+      r.from = $('#rA', body).value; r.to = $('#rB', body).value;
+      if (r.from === r.to) { toast('서로 다른 두 사람을 골라주세요'); return; }
+      r.label = label; r.page = page;
+      await db.put('relations', r);
+    }
     await afterChange();
     await closeTop();
   };
@@ -713,6 +737,85 @@ function relationSheet(r) {
     await afterChange();
     await closeTop();
   });
+}
+
+// 가족 한 번에: 가문 이름 + 구성원(부모·자녀·기타)을 적으면 인물 만들고 관계까지 자동으로 이어줌
+const FAMILY_ROLES = ['부모', '자녀', '친척'];
+function familySheet() {
+  const { people, book } = state.current;
+  const famRow = (v = {}) => `<div class="fam-row" data-pid="${v.pid || ''}">
+    <input class="fr-name" placeholder="이름" value="${esc(v.name || '')}" list="famNames">
+    <select class="fr-role">${FAMILY_ROLES.map((r) => `<option ${r === (v.role || '자녀') ? 'selected' : ''}>${r}</option>`).join('')}</select>
+    <input class="fr-page" type="number" inputmode="numeric" placeholder="쪽" value="${v.page || ''}">
+    <button class="al-del" type="button" aria-label="빼기">✕</button>
+  </div>`;
+  const body = openSheet(`
+    <h3>👪 가족 한 번에</h3>
+    <p class="hint">가문과 구성원을 적으면 인물을 만들고 <b>부부(부모 두 명)·부모·자녀·형제자매 관계를 자동으로</b> 이어요. 이미 있는 인물은 아래에서 눌러 넣으세요. 다른 집안과의 결혼은 <b>＋ 관계</b>에서 이어주세요.</p>
+    <label>가문 · 성<input id="fName" placeholder="예: 베넷가" list="famList"></label>
+    <datalist id="famList">${[...new Set(people.flatMap((p) => [p.family, p.marriedFamily]).filter(Boolean))].map((f) => `<option value="${esc(f)}">`).join('')}</datalist>
+    <datalist id="famNames">${people.map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>
+    ${people.length ? `<div class="field-title">이미 있는 인물 <small>누르면 구성원에 들어가요</small></div><div class="pchips" id="fExist">${people.map((p) => `<button type="button" class="pchip" data-id="${p.id}"><i style="background:${familyColor(p.family)}"></i>${esc(p.name)}</button>`).join('')}</div>` : ''}
+    <div class="field-title">구성원 <small>이름 · 역할 · 처음 나온 쪽</small></div>
+    <div id="fRows">${famRow({ role: '부모' })}${famRow({ role: '부모' })}${famRow()}${famRow()}</div>
+    <button class="ghost wide" id="fAdd" type="button">＋ 구성원 추가</button>
+    <label class="check"><input type="checkbox" id="fSib"> 자녀끼리 형제자매 선도 잇기 <small>(관계도가 복잡해질 수 있어요)</small></label>
+    <label>관계가 드러난 쪽 <small>선택</small><input id="fPage" type="number" inputmode="numeric" placeholder="모르면 비워두세요"></label>
+    <div class="btn-row"><button class="primary" id="fSave">가족 묶기</button></div>`, { full: true });
+  const rows = $('#fRows', body);
+  const bindRows = () => $$('.al-del', rows).forEach((b) => (b.onclick = () => b.parentElement.remove()));
+  bindRows();
+  $('#fAdd', body).onclick = () => { rows.insertAdjacentHTML('beforeend', famRow()); bindRows(); $$('.fr-name', rows).at(-1).focus(); };
+  $$('#fExist .pchip', body).forEach((c) => (c.onclick = () => {
+    const p = people.find((x) => x.id === c.dataset.id);
+    if ($(`.fam-row[data-pid="${p.id}"]`, rows)) return;
+    const empty = $$('.fam-row', rows).find((r) => !$('.fr-name', r).value.trim());
+    if (empty) { empty.dataset.pid = p.id; $('.fr-name', empty).value = p.name; $('.fr-page', empty).value = p.firstPage || ''; }
+    else { rows.insertAdjacentHTML('beforeend', famRow({ pid: p.id, name: p.name, page: p.firstPage })); bindRows(); }
+    c.classList.add('on');
+    if (!$('#fName', body).value && p.family) $('#fName', body).value = p.family;
+  }));
+  $('#fSave', body).onclick = async () => {
+    const fam = $('#fName', body).value.trim();
+    const page = +$('#fPage', body).value || 0;
+    const members = $$('.fam-row', rows).map((r) => ({
+      pid: r.dataset.pid, name: $('.fr-name', r).value.trim(), role: $('.fr-role', r).value, page: +$('.fr-page', r).value || 0,
+    })).filter((m) => m.name);
+    if (members.length < 2) { toast('구성원을 두 명 이상 적어주세요'); return; }
+    // 인물 찾기/만들기
+    const all = [...people];
+    let t = Date.now();
+    for (const m of members) {
+      let p = (m.pid && all.find((x) => x.id === m.pid)) || all.find((x) => x.name.trim() === m.name);
+      if (!p) {
+        p = { id: uid(), bookId: book.id, name: m.name, family: fam, firstPage: m.page || page, aliases: [], createdAt: t++ };
+        all.push(p);
+      } else {
+        p = { ...p };
+        if (fam && !p.family) p.family = fam;
+        if (m.page && !p.firstPage) p.firstPage = m.page;
+      }
+      await db.put('people', p);
+      m.id = p.id;
+    }
+    // 관계 만들기 (이미 같은 관계가 있으면 건너뜀)
+    const existing = await db.byBook('relations', book.id);
+    const has = (a, b2, kind) => existing.some((r) => r.kind === kind && ((r.from === a && r.to === b2) || (r.from === b2 && r.to === a)));
+    const rels = [];
+    const link = (a, b2, kind, label) => { if (a !== b2 && !has(a, b2, kind) && !rels.some((r) => r.kind === kind && ((r.from === a && r.to === b2) || (r.from === b2 && r.to === a)))) rels.push({ from: a, to: b2, kind, label }); };
+    const parents = members.filter((m) => m.role === '부모');
+    const kids = members.filter((m) => m.role === '자녀');
+    const kin = members.filter((m) => m.role === '친척');
+    if (parents.length >= 2) link(parents[0].id, parents[1].id, 'love', '부부');
+    for (const pa of parents) for (const k of kids) link(pa.id, k.id, 'family', '부모·자식');
+    if (!parents.length || $('#fSib', body).checked) for (let i = 1; i < kids.length; i++) link(kids[i - 1].id, kids[i].id, 'family', '형제자매');
+    for (const k of kin) { const to = parents[0] || kids[0]; if (to) link(k.id, to.id, 'family', '친척'); }
+    let i = 0;
+    for (const r of rels) await db.put('relations', { id: uid(), bookId: book.id, ...r, page, createdAt: Date.now() + i++ });
+    await afterChange();
+    await closeTop();
+    toast(`${fam || '가족'}: ${members.length}명, 관계 ${rels.length}개를 이었어요`);
+  };
 }
 
 async function afterChange() {

@@ -411,3 +411,12 @@ blockquote.shared { margin: 0 0 14px; font-family: var(--serif); font-size: 15px
 .hl-tools .seg { margin: 0; flex: 1; flex-wrap: nowrap; }
 .hl-tools .seg button { flex: 1; padding: 0 6px; }
 .hl-tools .ghost { min-height: 40px; padding: 0 14px; font-size: 16px; }
+
+/* ===== 가족 한 번에 · 여러 명 잇기 (v1.3.0) ===== */
+.pchips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.pchip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 18px; border: 1px solid var(--line); background: var(--paper2); font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1; }
+.pchip i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.pchip.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.fam-row { display: grid; grid-template-columns: 1fr 84px 58px 30px; gap: 6px; margin-bottom: 6px; }
+.fam-row > * { height: 44px; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper2); min-width: 0; font-size: 15px; line-height: 1.2; }
+#bpActions > button { padding: 0 6px; }
