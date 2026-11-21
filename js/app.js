@@ -6,7 +6,7 @@ import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, 
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.1.3';
+const APP_VERSION = '1.2.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -208,11 +208,13 @@ function renderToday(quotes) {
   if (!quotes.length || state.current) { el.hidden = true; return; }
   const d = new Date();
   const seed = d.getFullYear() * 1000 + d.getMonth() * 40 + d.getDate();
-  const sorted = [...quotes].sort((a, b) => (a.id < b.id ? -1 : 1));
+  const pool = quotes.filter((x) => !x.draft);
+  if (!pool.length) { el.hidden = true; return; }
+  const sorted = [...pool].sort((a, b) => (a.id < b.id ? -1 : 1));
   const q = sorted[seed % sorted.length];
   const b = state.books.find((x) => x.id === q.bookId);
   if (!b) { el.hidden = true; return; }
-  el.innerHTML = `<div class="today-label">오늘의 한 줄</div><p class="today-text"><span class="hl">${esc(q.text)}</span></p><div class="today-src">${esc(b.title)} · p.${q.page || '?'}</div>`;
+  el.innerHTML = `<div class="today-label">오늘의 한 줄</div>${q.text ? `<p class="today-text"><span class="hl">${esc(q.text)}</span></p>` : ''}${q.image && !q.text ? `<img class="today-img" src="${q.image}" alt="">` : ''}<div class="today-src">${esc(b.title)} · p.${q.page || '?'}</div>`;
   el.hidden = false;
   el.onclick = () => openBook(b.id, q.id);
 }
@@ -268,6 +270,12 @@ function leftPageCanvas() {
   x.textAlign = 'left'; x.fillText('밑줄서재', 50, 730);
   return c;
 }
+const imgCache = new Map();
+function cachedImg(src) {
+  let im = imgCache.get(src);
+  if (!im) { im = new Image(); im.onload = () => refreshPages(); im.src = src; imgCache.set(src, im); }
+  return im.complete && im.naturalWidth ? im : null;
+}
 function rightPageCanvas() {
   const { quotes } = state.current;
   const [c, x] = mkCanvas(512, 760);
@@ -284,20 +292,30 @@ function rightPageCanvas() {
   let y = 120;
   for (const q of quotes) {
     x.font = '400 26px "Gowun Batang", serif';
-    const lines = wrap(x, q.text, 380).slice(0, 3);
-    const need = 36 + lines.length * 40 + 24;
+    const lines = q.text ? wrap(x, q.text + (q.draft ? '…' : ''), 380).slice(0, q.image ? 1 : 3) : [];
+    const im = q.image ? cachedImg(q.image) : null;
+    const imgH = q.image ? (im ? Math.min(150, (380 * im.naturalHeight) / im.naturalWidth) : 60) : 0;
+    const need = 36 + imgH + (imgH ? 10 : 0) + lines.length * 40 + 24;
     if (y + need > 730) break;
     x.fillStyle = '#c8553d'; x.font = '700 20px Pretendard, sans-serif';
-    x.fillText(`p.${q.page || '?'}`, 70, y);
-    y += 36;
+    x.fillText(`${q.draft ? '🔖 ' : ''}p.${q.page || '?'}`, 70, y);
+    y += 20;
+    if (q.image) {
+      if (im) {
+        const w = Math.min(380, (imgH * im.naturalWidth) / im.naturalHeight);
+        x.drawImage(im, 70, y, w, imgH);
+      } else { x.fillStyle = 'rgba(43,38,34,.08)'; x.fillRect(70, y, 380, imgH); }
+      y += imgH + 10;
+    }
+    y += 16;
     x.font = '400 26px "Gowun Batang", serif';
-    lines.forEach((l, i) => {
+    lines.forEach((l) => {
       const w = x.measureText(l).width;
-      x.fillStyle = 'rgba(242,201,76,.55)'; x.fillRect(68, y - 12, w + 4, 14);
-      x.fillStyle = '#2b2622'; x.fillText(l + (i === 2 && wrap(x, q.text, 380).length > 3 ? '…' : ''), 70, y);
+      if (!q.draft) { x.fillStyle = 'rgba(242,201,76,.55)'; x.fillRect(68, y - 12, w + 4, 14); }
+      x.fillStyle = q.draft ? '#8a7e72' : '#2b2622'; x.fillText(l, 70, y);
       y += 40;
     });
-    y += 24;
+    y += 24 - (lines.length ? 0 : 16);
   }
   return c;
 }
@@ -414,9 +432,11 @@ function renderPanel() {
       <button data-tab="people" class="${state.tab === 'people' ? 'on' : ''}">인물 <b>${people.length}</b></button>
     </div>
     <div class="tab-body" id="tabBody"></div>
-    <div class="bp-actions">${state.tab === 'quotes'
-      ? `<button class="primary" id="addQuote">＋ 밑줄 긋기</button><button class="ghost" id="importBtn">메모장에서 가져오기</button>`
-      : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button>`}</div>`;
+`;
+  // 아래 버튼은 패널 밖(화면 고정)에 두어 스크롤·전체 화면 전환과 상관없이 항상 바닥에 붙어 있게
+  $('#bpActions').innerHTML = state.tab === 'quotes'
+    ? `<button class="primary" id="addQuote">＋ 밑줄 긋기</button><button class="ghost" id="addMark">🔖 책갈피</button>`
+    : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button>`;
 
   const panel = $('#bookPanel');
   bindDrag($('#bpDrag'), panel, (dy, v) => {
@@ -436,7 +456,7 @@ function renderPanel() {
   $$('.pb-dot').forEach((d) => (d.onclick = () => { if (state.tab !== 'quotes') { state.tab = 'quotes'; renderPanel(); } focusQuote(d.dataset.q); }));
   if (state.tab === 'quotes') {
     $('#addQuote').onclick = () => quoteSheet();
-    $('#importBtn').onclick = () => importSheet();
+    $('#addMark').onclick = () => bookmarkSheet();
     renderQuotes();
   } else {
     $('#addPerson').onclick = () => personSheet();
@@ -449,16 +469,25 @@ function renderQuotes() {
   const { quotes, people } = state.current;
   const body = $('#tabBody');
   if (!quotes.length) {
-    body.innerHTML = `<div class="empty">마음에 남은 문장이 있으면<br><b>＋ 밑줄 긋기</b>로 쪽수와 함께 남겨두세요.<br><small>사진을 찍으면 글자를 읽어서 형광펜처럼 고를 수 있어요.</small></div>`;
+    body.innerHTML = `<div class="empty">마음에 남은 문장이 있으면 <b>＋ 밑줄 긋기</b>로,<br>읽는 흐름을 끊기 싫으면 <b>🔖 책갈피</b>로 쪽수만 남겨두세요.<br><small>사진 위에 형광펜을 그으면 그대로 밑줄이 돼요.</small></div>
+      <button class="link wide" id="importLink">메모장에 적어둔 글귀 가져오기</button>`;
+    $('#importLink').onclick = () => importSheet();
     return;
   }
-  body.innerHTML = quotes.map((q) => `
-    <article class="q" data-id="${q.id}">
-      <div class="q-page">p.${q.page || '?'}</div>
-      <blockquote><span class="hl">${linkNames(q.text, people)}</span></blockquote>
+  const drafts = quotes.filter((q) => q.draft);
+  if (!drafts.length) state.onlyDrafts = false;
+  const list = state.onlyDrafts ? drafts : quotes;
+  body.innerHTML = `<div class="q-head">${drafts.length ? `<button class="chip ${state.onlyDrafts ? 'on' : ''}" id="draftChip">🔖 채울 밑줄 ${drafts.length}</button>` : '<span></span>'}<button class="link" id="importLink">메모장에서 가져오기</button></div>` +
+    list.map((q) => `
+    <article class="q ${q.draft ? 'draft' : ''}" data-id="${q.id}">
+      <div class="q-page">p.${q.page || '?'}${q.draft ? '<span class="badge">🔖 채우기</span>' : ''}</div>
+      ${q.image ? `<img class="q-img" src="${q.image}" alt="사진 밑줄">` : ''}
+      ${q.text ? (q.draft ? `<blockquote class="draft-text">${esc(q.text)}…</blockquote>` : `<blockquote><span class="hl">${linkNames(q.text, people)}</span></blockquote>`) : ''}
       ${q.note ? `<p class="q-note">${esc(q.note)}</p>` : ''}
       ${q.tags?.length ? `<div class="tags">${q.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : ''}
     </article>`).join('');
+  $('#importLink').onclick = () => importSheet();
+  $('#draftChip') && ($('#draftChip').onclick = () => { state.onlyDrafts = !state.onlyDrafts; renderQuotes(); });
   $$('.q', body).forEach((a) => (a.onclick = (e) => {
     const nm = e.target.closest('.nm');
     const q = quotes.find((x) => x.id === a.dataset.id);
@@ -712,70 +741,114 @@ function cleanPasted(raw) {
 function quoteSheet(q, prefill) {
   const isNew = !q;
   q = q ? { ...q } : { id: uid(), bookId: state.current.book.id, createdAt: Date.now(), tags: [], text: prefill?.text || '', page: prefill?.page || 0 };
+  let rec = null;
   const body = openSheet(`
-    <h3>${isNew ? '밑줄 긋기' : '밑줄 고치기'}</h3>
+    <h3>${isNew ? '밑줄 긋기' : q.draft ? '책갈피 채우기' : '밑줄 고치기'}</h3>
+    ${q.draft ? '<div class="notice warn">🔖 책갈피로 남겨둔 밑줄이에요. 문장을 채우고 저장하면 보통 밑줄이 돼요.</div>' : ''}
     <div class="ocr-btns">
-      <label class="ghost">${icon.camera} 사진<input type="file" accept="image/*" capture="environment" id="qCam" hidden></label>
-      <label class="ghost">${icon.image} 앨범<input type="file" accept="image/*" id="qAlbum" hidden></label>
-      <button class="ghost" id="qPaste" type="button">${icon.paste} 붙여넣기</button>
+      <label class="primary">${icon.camera} 사진 밑줄<input type="file" accept="image/*" capture="environment" id="qCam" hidden></label>
+      <label class="ghost">${icon.image} 앨범에서<input type="file" accept="image/*" id="qAlbum" hidden></label>
     </div>
-    <details class="howto"><summary>폰에서 글자 복사하는 법 <small>사진 인식보다 정확해요</small></summary>
-      <ol>
-        <li><b>갤러리(삼성)</b>: 책 사진을 열고 아래 <b>T</b> 버튼 → 문장 선택 → 복사</li>
-        <li><b>구글 렌즈</b>: 카메라로 비추고 <b>텍스트</b> → 문장 선택 → 복사<br><small>홈 화면에 추가한 밑줄서재라면 복사 대신 <b>공유 → 밑줄서재</b>로 바로 보낼 수 있어요</small></li>
-        <li><b>아이폰</b>: 사진 앱이나 카메라에서 글자를 길게 눌러 선택 → 복사</li>
-      </ol>
-      <p>그다음 여기서 <b>붙여넣기</b>를 누르면 줄바꿈을 정리하고, 쪽수만 있는 줄은 쪽 칸에 넣어요.</p>
-    </details>
+    <div class="q-imgbox" ${q.image ? '' : 'hidden'}><img id="qImg" src="${q.image || ''}" alt="사진 밑줄"><button class="ghost" id="qImgDel" type="button">✕ 사진 빼기</button></div>
     <label>쪽<input id="qPage" type="number" inputmode="numeric" value="${q.page || ''}" placeholder="몇 쪽?"></label>
-    <label>글귀<textarea id="qText" rows="4" placeholder="마음에 남은 문장">${esc(q.text || '')}</textarea></label>
+    <div class="field-row"><span class="field-title">글귀 <small>사진 밑줄만 있어도 돼요</small></span>
+      <div class="text-tools">
+        <button class="mini" id="qPaste" type="button">${icon.paste} 붙여넣기</button>
+        <button class="mini" id="qMic" type="button">🎤 말하기</button>
+        <label class="mini">🔤 글자 인식<input type="file" accept="image/*" id="qOcr" hidden></label>
+      </div>
+    </div>
+    <textarea id="qText" rows="4" placeholder="마음에 남은 문장 (나중에 채워도 돼요)">${esc(q.text || '')}</textarea>
+    <details class="howto"><summary>글자로 빨리 넣는 법</summary>
+      <ol>
+        <li><b>말하기</b>: 🎤를 누르고 문장을 소리 내어 읽어요</li>
+        <li><b>폰 기본 카메라 앱</b>(앱 안 사진 버튼 말고)이나 <b>갤러리 T 버튼</b>, <b>구글 렌즈</b>에서 문장 선택 → 복사 → 여기서 붙여넣기<br><small>앱 안 사진 버튼은 간단한 촬영 화면이라 글자 복사 기능이 안 떠요</small></li>
+        <li><b>렌즈 공유</b>: 렌즈에서 문장 선택 → 공유 → 밑줄서재 (홈 화면에 추가한 경우)</li>
+      </ol>
+    </details>
+    ${q.draft ? '<label class="check"><input type="checkbox" id="qKeepDraft"> 아직 책갈피로 두기</label>' : ''}
     <label>내 생각 <small>선택</small><textarea id="qNote" rows="2">${esc(q.note || '')}</textarea></label>
     <label>태그 <small>띄어쓰기로 구분</small><input id="qTags" value="${esc((q.tags || []).map((t) => '#' + t).join(' '))}" placeholder="#위로 #문장력"></label>
-    <div class="btn-row">${isNew ? '' : '<button class="danger" id="qDel">삭제</button>'}<button class="primary" id="qSave">저장</button></div>`);
-  const onFile = (e) => {
+    <div class="btn-row">${isNew ? '' : '<button class="danger" id="qDel">삭제</button>'}<button class="primary" id="qSave">저장</button></div>`, { onClose: () => { try { rec?.stop(); } catch {} } });
+  const t = $('#qText', body);
+  const setPage = (page) => { if (page && !$('#qPage', body).value) $('#qPage', body).value = page; };
+  const setImage = (img) => {
+    q.image = img || '';
+    $('#qImg', body).src = q.image;
+    $('.q-imgbox', body).hidden = !q.image;
+  };
+  // 사진 밑줄
+  const onPhoto = (e) => {
     const f = e.target.files?.[0];
     e.target.value = '';
-    if (f) ocrSheet(f, (text, page) => {
-      const t = $('#qText', body);
-      t.value = t.value.trim() ? t.value.trim() + '\n' + text : text;
-      if (page && !$('#qPage', body).value) $('#qPage', body).value = page;
-    });
+    if (f) underlineSheet(f, (img) => setImage(img), setPage);
   };
+  $('#qCam', body).onchange = onPhoto;
+  $('#qAlbum', body).onchange = onPhoto;
+  $('#qImgDel', body).onclick = () => setImage('');
+  // 글자 인식(실험)
+  $('#qOcr', body).onchange = (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (f) ocrSheet(f, (text, page) => { t.value = t.value.trim() ? t.value.trim() + ' ' + text : text; setPage(page); });
+  };
+  // 붙여넣기
   const putText = (raw) => {
     const { text, page } = cleanPasted(raw);
     if (!text) return false;
-    const t = $('#qText', body);
     t.value = t.value.trim() ? t.value.trim() + ' ' + text : text;
-    if (page && !$('#qPage', body).value) $('#qPage', body).value = page;
-    t.dispatchEvent(new Event('input'));
+    setPage(page);
     return true;
   };
   $('#qPaste', body).onclick = async () => {
     try {
       const raw = await navigator.clipboard.readText();
-      if (!putText(raw)) toast('복사된 글자가 없어요. 먼저 사진에서 문장을 복사해 주세요');
+      if (!putText(raw)) toast('복사된 글자가 없어요. 먼저 문장을 복사해 주세요');
       else toast('붙여넣었어요. 틀린 글자만 고쳐주세요');
     } catch {
-      $('#qText', body).focus();
+      t.focus();
       toast('글귀 칸을 길게 눌러 붙여넣기 해주세요');
     }
   };
-  // 글귀 칸에 직접 붙여넣을 때도 여러 줄이면 같은 방식으로 정리
-  $('#qText', body).addEventListener('paste', (e) => {
+  t.addEventListener('paste', (e) => {
     const raw = e.clipboardData?.getData('text') || '';
     if (!raw.includes('\n')) return;
     e.preventDefault();
     putText(raw);
   });
-  $('#qCam', body).onchange = onFile;
-  $('#qAlbum', body).onchange = onFile;
-  if (isNew) setTimeout(() => $('#qPage', body).focus(), 300);
+  // 말하기 (음성 받아쓰기)
+  const mic = $('#qMic', body);
+  mic.onclick = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { t.focus(); toast('여기서는 음성 입력이 안 돼요. 키보드의 🎤 버튼을 눌러 말해보세요'); return; }
+    if (rec) { rec.stop(); return; }
+    const base = t.value.trim();
+    rec = new SR();
+    rec.lang = 'ko-KR';
+    rec.interimResults = true;
+    rec.continuous = true;
+    rec.onresult = (ev) => {
+      let said = '';
+      for (const r of ev.results) said += r[0].transcript;
+      t.value = (base ? base + ' ' : '') + said.trim();
+    };
+    rec.onerror = (ev) => toast(ev.error === 'not-allowed' ? '마이크 권한을 허용해 주세요' : ev.error === 'no-speech' ? '목소리가 안 들렸어요' : '음성 입력이 끊겼어요');
+    rec.onend = () => { rec = null; mic.classList.remove('rec'); mic.textContent = '🎤 말하기'; };
+    try {
+      rec.start();
+      mic.classList.add('rec');
+      mic.textContent = '■ 멈추기';
+    } catch { rec = null; }
+  };
+  if (isNew && !prefill) setTimeout(() => $('#qPage', body).focus(), 300);
   $('#qSave', body).onclick = async () => {
-    q.text = $('#qText', body).value.trim();
-    if (!q.text) { toast('글귀를 적어주세요'); return; }
+    try { rec?.stop(); } catch {}
+    q.text = t.value.trim();
+    if (!q.text && !q.image) { toast('문장을 적거나 사진 밑줄을 그어주세요'); return; }
     q.page = +$('#qPage', body).value || 0;
     q.note = $('#qNote', body).value.trim();
     q.tags = parseTags($('#qTags', body).value);
+    if (q.draft) q.draft = !!$('#qKeepDraft', body)?.checked;
     q.updatedAt = Date.now();
     await db.put('quotes', q);
     state.shelfDirty = true;
@@ -790,6 +863,208 @@ function quoteSheet(q, prefill) {
     await afterChange();
     await closeTop();
   });
+}
+
+// 책갈피 밑줄: 쪽수와 앞 몇 글자만 남기고 나중에 채우기
+function bookmarkSheet() {
+  const body = openSheet(`
+    <h3>🔖 책갈피</h3>
+    <p class="hint">읽는 흐름을 끊지 말고 쪽수랑 앞 몇 글자만 남겨두세요. 목록의 <b>채울 밑줄</b>에서 나중에 채우면 돼요.</p>
+    <label>쪽<input id="bPage" type="number" inputmode="numeric" placeholder="몇 쪽?" enterkeyhint="next"></label>
+    <label>앞 몇 글자 <small>선택</small><input id="bWords" placeholder="예: 엘리자베스는 그의" enterkeyhint="done"></label>
+    <div class="btn-row"><button class="primary" id="bSave">책갈피 꽂기</button></div>`);
+  setTimeout(() => $('#bPage', body).focus(), 300);
+  const save = async () => {
+    const page = +$('#bPage', body).value || 0;
+    const words = $('#bWords', body).value.trim();
+    if (!page && !words) { toast('쪽수나 앞 몇 글자를 적어주세요'); return; }
+    await db.put('quotes', { id: uid(), bookId: state.current.book.id, page, text: words, draft: true, tags: [], note: '', createdAt: Date.now() });
+    state.shelfDirty = true;
+    await afterChange();
+    await closeTop();
+    toast(`p.${page || '?'}에 책갈피를 꽂았어요`);
+  };
+  $('#bSave', body).onclick = save;
+  $('#bPage', body).onkeydown = (e) => { if (e.key === 'Enter') $('#bWords', body).focus(); };
+  $('#bWords', body).onkeydown = (e) => { if (e.key === 'Enter') save(); };
+}
+
+// 사진 밑줄: 범위 고르기 → 형광펜 긋기 → 그은 부분만 잘라 이미지로 저장 (글자 인식 없음)
+async function underlineSheet(file, onUse, onPage) {
+  const body = openSheet(`
+    <h3>사진 밑줄</h3>
+    <div class="ocr-status"><div class="bar"><i></i></div><span>사진 준비 중…</span></div>
+    <div class="crop-step" hidden>
+      <p class="hint">밑줄 그을 문장이 들어가게 범위를 정하세요. 모서리·변을 끌어 조절해요.</p>
+      <div class="crop-wrap"><img alt=""><div class="crop-box">${['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((h) => `<i class="ch ch-${h}" data-h="${h}"></i>`).join('')}</div></div>
+      <div class="btn-row"><button class="ghost" id="cropRotate" type="button">↻ 돌리기</button><button class="primary" id="cropGo" type="button">다음: 밑줄 긋기</button></div>
+    </div>
+    <div class="hl-step" hidden>
+      <p class="hint">문장 위를 <b>손가락으로 쭉 그으세요</b>. 여러 줄이면 줄마다 한 번씩 그어요.</p>
+      <div class="hl-wrap"><canvas></canvas></div>
+      <div class="hl-tools">
+        <div class="seg" id="hlSize"><button type="button" data-s="0.026">가늘게</button><button type="button" data-s="0.038" class="on">보통</button><button type="button" data-s="0.055">굵게</button></div>
+        <button class="ghost" id="hlUndo" type="button">↶</button>
+        <button class="ghost" id="hlBack" type="button">✂</button>
+      </div>
+      <div class="btn-row"><button class="primary" id="hlUse">이 밑줄 쓰기</button></div>
+    </div>`, { full: true });
+  const maxPage = state.current?.book?.pages || 0;
+  let src = null;
+  let crop = { x: 0.04, y: 0.04, w: 0.92, h: 0.92 };
+  let part = null;
+  let strokes = [];
+  let size = 0.038;
+  const step = (name) => {
+    $('.ocr-status', body).hidden = name !== 'status';
+    $('.crop-step', body).hidden = name !== 'crop';
+    $('.hl-step', body).hidden = name !== 'hl';
+  };
+  const fitBox = (el, w, h, hFrac) => {
+    const maxH = Math.round(innerHeight * hFrac);
+    const maxW = body.clientWidth || innerWidth - 36;
+    const k = Math.min(maxW / w, maxH / h);
+    el.style.width = Math.round(w * k) + 'px';
+    el.style.height = Math.round(h * k) + 'px';
+  };
+  // 범위 고르기
+  const cropWrap = $('.crop-wrap', body);
+  const cropBox = $('.crop-box', body);
+  const drawCrop = () => Object.assign(cropBox.style, { left: crop.x * 100 + '%', top: crop.y * 100 + '%', width: crop.w * 100 + '%', height: crop.h * 100 + '%' });
+  const showCrop = () => {
+    $('img', cropWrap).src = fitForOcr(src, 1400).toDataURL('image/jpeg', 0.85);
+    fitBox(cropWrap, src.width, src.height, 0.62);
+    drawCrop();
+    step('crop');
+  };
+  let drag = null;
+  cropWrap.addEventListener('pointerdown', (e) => {
+    const h = e.target.dataset.h || (e.target === cropBox ? 'move' : null);
+    if (!h) return;
+    e.preventDefault();
+    cropWrap.setPointerCapture(e.pointerId);
+    drag = { h, x: e.clientX, y: e.clientY, start: { ...crop } };
+  });
+  cropWrap.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = cropWrap.getBoundingClientRect();
+    const dx = (e.clientX - drag.x) / r.width;
+    const dy = (e.clientY - drag.y) / r.height;
+    const s0 = drag.start;
+    const MIN = 0.08;
+    let { x, y, w, h } = s0;
+    if (drag.h === 'move') {
+      x = Math.min(1 - w, Math.max(0, s0.x + dx));
+      y = Math.min(1 - h, Math.max(0, s0.y + dy));
+    } else {
+      if (drag.h.includes('w')) { const nx = Math.min(s0.x + s0.w - MIN, Math.max(0, s0.x + dx)); w = s0.w + (s0.x - nx); x = nx; }
+      if (drag.h.includes('e')) w = Math.min(1 - s0.x, Math.max(MIN, s0.w + dx));
+      if (drag.h.includes('n')) { const ny = Math.min(s0.y + s0.h - MIN, Math.max(0, s0.y + dy)); h = s0.h + (s0.y - ny); y = ny; }
+      if (drag.h.includes('s')) h = Math.min(1 - s0.y, Math.max(MIN, s0.h + dy));
+    }
+    crop = { x, y, w, h };
+    drawCrop();
+  });
+  const endDrag = () => { drag = null; };
+  cropWrap.addEventListener('pointerup', endDrag);
+  cropWrap.addEventListener('pointercancel', endDrag);
+  $('#cropRotate', body).onclick = () => {
+    src = rotateCanvas(src, 90);
+    crop = { x: 1 - crop.y - crop.h, y: crop.x, w: crop.h, h: crop.w };
+    showCrop();
+  };
+
+  // 형광펜 긋기
+  const cv = $('.hl-wrap canvas', body);
+  const ctx = cv.getContext('2d');
+  let cur = null;
+  const lw = () => Math.max(6, part.width * size);
+  const paintHl = () => {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(part, 0, 0);
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.lineCap = 'round';
+    for (const st of cur ? [...strokes, cur] : strokes) {
+      ctx.strokeStyle = 'rgba(247, 203, 72, 0.9)';
+      ctx.lineWidth = st.w;
+      ctx.beginPath();
+      ctx.moveTo(st.x0, st.y0);
+      ctx.lineTo(st.x1, st.y1);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  };
+  const toImg = (e) => {
+    const r = cv.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * cv.width, y: ((e.clientY - r.top) / r.height) * cv.height };
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    cv.setPointerCapture(e.pointerId);
+    const p = toImg(e);
+    cur = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, w: lw() };
+    paintHl();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!cur) return;
+    const p = toImg(e);
+    cur.x1 = p.x;
+    // 거의 수평이면 반듯하게 (책 줄은 수평이니까)
+    cur.y1 = Math.abs(p.y - cur.y0) < Math.abs(p.x - cur.x0) * 0.12 ? cur.y0 : p.y;
+    paintHl();
+  });
+  const endHl = () => {
+    if (!cur) return;
+    if (Math.hypot(cur.x1 - cur.x0, cur.y1 - cur.y0) > cur.w * 0.6) strokes.push(cur);
+    cur = null;
+    paintHl();
+  };
+  cv.addEventListener('pointerup', endHl);
+  cv.addEventListener('pointercancel', endHl);
+  $$('#hlSize button', body).forEach((b) => (b.onclick = () => {
+    $$('#hlSize button', body).forEach((x) => x.classList.remove('on'));
+    b.classList.add('on');
+    size = +b.dataset.s;
+  }));
+  $('#hlUndo', body).onclick = () => { strokes.pop(); paintHl(); };
+  $('#hlBack', body).onclick = () => showCrop();
+  $('#cropGo', body).onclick = () => {
+    part = fitForOcr(cropCanvas(src, crop), 1600);
+    cv.width = part.width; cv.height = part.height;
+    fitBox(cv, part.width, part.height, 0.58);
+    strokes = [];
+    paintHl();
+    step('hl');
+  };
+  $('#hlUse', body).onclick = async () => {
+    paintHl();
+    // 그은 줄 위아래로 조금 여유를 두고 잘라서 카드에 쓰기
+    let y0 = 0; let y1 = cv.height;
+    if (strokes.length) {
+      const pad = Math.max(...strokes.map((s) => s.w)) * 1.3;
+      y0 = Math.max(0, Math.min(...strokes.map((s) => Math.min(s.y0, s.y1) - s.w / 2)) - pad);
+      y1 = Math.min(cv.height, Math.max(...strokes.map((s) => Math.max(s.y0, s.y1) + s.w / 2)) + pad);
+    }
+    const k = Math.min(1, 1000 / cv.width);
+    const out = document.createElement('canvas');
+    out.width = Math.round(cv.width * k);
+    out.height = Math.round((y1 - y0) * k);
+    out.getContext('2d').drawImage(cv, 0, y0, cv.width, y1 - y0, 0, 0, out.width, out.height);
+    onUse(out.toDataURL('image/jpeg', 0.82));
+    const full = fitForOcr(src);
+    const c = crop;
+    await closeTop();
+    // 쪽수는 뒤에서 조용히 찾아서, 비어 있으면 채움
+    findPageNumber(full, maxPage, c).then((pg) => pg && onPage(pg)).catch(() => {});
+  };
+
+  step('status');
+  try {
+    src = await fileToCanvas(file, 3200);
+    showCrop();
+  } catch (e) {
+    $('.ocr-status span', body).textContent = '사진을 열지 못했어요: ' + e.message;
+  }
 }
 
 async function ocrSheet(file, onUse) {
@@ -1239,7 +1514,7 @@ async function searchSheet() {
     const mark = (s) => esc(s).replace(new RegExp(esc(raw).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (m) => `<mark>${m}</mark>`);
     out.innerHTML =
       (ps.length ? `<h4 class="sec">인물</h4>${ps.map((p) => `<button class="sr person" data-b="${p.bookId}"><b>${esc(p.name)}</b> <small>${esc(books[p.bookId].title)}</small><div class="muted">${esc((p.aliases || []).map((a) => a.name).join(' · '))}</div></button>`).join('')}` : '') +
-      (qs.length ? `<h4 class="sec">밑줄 ${qs.length}</h4>${qs.slice(0, 100).map((x) => `<button class="sr" data-b="${x.bookId}" data-q="${x.id}"><div class="sr-src">${esc(books[x.bookId].title)} · <b>p.${x.page || '?'}</b></div><div class="sr-text">${tagOnly ? esc(x.text) : mark(x.text)}</div>${x.note ? `<div class="muted">${tagOnly ? esc(x.note) : mark(x.note)}</div>` : ''}</button>`).join('')}` : '') ||
+      (qs.length ? `<h4 class="sec">밑줄 ${qs.length}</h4>${qs.slice(0, 100).map((x) => `<button class="sr" data-b="${x.bookId}" data-q="${x.id}"><div class="sr-src">${esc(books[x.bookId].title)} · <b>p.${x.page || '?'}</b></div>${x.image ? `<img class="sr-img" src="${x.image}" alt="">` : ''}${x.text ? `<div class="sr-text">${tagOnly ? esc(x.text) : mark(x.text)}</div>` : ''}${x.note ? `<div class="muted">${tagOnly ? esc(x.note) : mark(x.note)}</div>` : ''}</button>`).join('')}` : '') ||
       '<div class="empty small">찾는 내용이 없어요</div>';
     $$('.sr', out).forEach((b) => (b.onclick = async () => {
       await closeTop();
