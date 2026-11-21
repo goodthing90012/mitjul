@@ -335,3 +335,31 @@ body.book-open #btnBack { display: inline-flex; }
 #bookPanel.expanded .drag-zone { border-radius: 0; height: calc(34px + var(--safe-t)); padding-top: var(--safe-t); }
 #bookPanel .tabs { top: 34px; }
 #bookPanel.expanded .tabs { top: calc(34px + var(--safe-t)); }
+
+/* 범위 고르기 */
+.crop-wrap { position: relative; margin: 6px auto 0; overflow: hidden; border-radius: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.crop-wrap img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.crop-box { position: absolute; border: 2px solid #f2c94c; box-shadow: 0 0 0 9999px rgba(20, 14, 8, .5); cursor: move; touch-action: none; }
+.ch { position: absolute; width: 28px; height: 28px; touch-action: none; }
+.ch::after { content: ""; position: absolute; left: 8px; top: 8px; width: 12px; height: 12px; border-radius: 50%; background: #f2c94c; box-shadow: 0 0 0 2px #fff; }
+.ch-nw { left: -14px; top: -14px; } .ch-ne { right: -14px; top: -14px; } .ch-se { right: -14px; bottom: -14px; } .ch-sw { left: -14px; bottom: -14px; }
+.ch-n { left: calc(50% - 14px); top: -14px; } .ch-s { left: calc(50% - 14px); bottom: -14px; }
+.ch-e { right: -14px; top: calc(50% - 14px); } .ch-w { left: -14px; top: calc(50% - 14px); }
+.crop-step .btn-row > .ghost { flex: 0 0 auto; padding: 0 12px; }
+.crop-step .btn-row > .primary { flex: 1; }
+.ocr-stage { justify-content: center; }
+.ocr-img { margin: 0 auto; }
+
+/* ===== 부드러운 전체 화면 전환 (v1.1.0): 높이 대신 위치(transform)만 움직임 ===== */
+:root { --safe-b-px: 0px; }
+.sheet { top: auto; height: 100vh; height: 100dvh; max-height: none; transform: translateY(100%); transition: transform .34s cubic-bezier(.22, .9, .3, 1), border-radius .34s; will-change: transform; }
+.sheet.full, .sheet.expanded { height: 100vh; height: 100dvh; max-height: none; }
+.sheet-wrap.on .sheet { transform: translateY(var(--off, 10vh)); }
+.sheet.dragging, #bookPanel.dragging, #bookPanel.dragging .bp-actions { transition: none !important; }
+.drag-zone { cursor: grab; }
+.dragging .drag-zone { cursor: grabbing; }
+#bookPanel { top: 0; height: 100vh; height: 100dvh; transform: translateY(100%); transition: transform .36s cubic-bezier(.22, .9, .3, 1), border-radius .36s; will-change: transform; }
+#bookPanel.on { transform: translateY(var(--off, 42vh)); }
+#bookPanel.expanded { top: 0; }
+#bookPanel .bp-actions { transform: translateY(calc(-1 * var(--off, 42vh))); transition: transform .36s cubic-bezier(.22, .9, .3, 1); }
+#bookPanel:not(.on) .bp-actions { transform: none; transition: none; }

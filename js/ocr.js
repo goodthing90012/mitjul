@@ -73,7 +73,7 @@ export async function recognize(canvas, onProgress) {
   progressCb = null;
   const words = (data.words || [])
     .filter((w) => w.text && w.text.trim())
-    .map((w, i) => ({ i, text: w.text.trim(), bbox: w.bbox, conf: w.confidence }));
+    .map((w, i) => ({ i, text: w.text.trim(), bbox: w.bbox, conf: w.confidence, blk: data.blocks ? data.blocks.indexOf(w.block) : 0, lineN: w.line?.words?.length || 1, lineHangul: ((w.line?.text || '').match(/[가-힣]/g) || []).length }));
   const good = words.filter((w) => w.conf >= 60).length;
   return { words, width: canvas.width, height: canvas.height, page: guessPage(words, canvas.height), conf: data.confidence || 0, score: (data.confidence || 0) * Math.sqrt(good + 1) };
 }
@@ -82,7 +82,7 @@ export async function recognize(canvas, onProgress) {
 export function guessPage(words, H) {
   const cands = words
     .map((w) => ({ w, n: w.text.replace(/[^0-9]/g, '') }))
-    .filter(({ w, n }) => n.length >= 1 && n.length <= 4 && n.length >= w.text.length - 1 &&
+    .filter(({ w, n }) => n.length >= 1 && n.length <= 4 && n.length >= w.text.length - 1 && w.lineHangul <= 4 &&
       (w.bbox.y0 > H * 0.84 || w.bbox.y1 < H * 0.14))
     .map(({ w, n }) => ({ n: +n, bottom: w.bbox.y0 > H * 0.84, conf: w.conf }))
     .filter((c) => c.n > 0);
@@ -114,14 +114,91 @@ export function joinWords(words) {
 
 // 방향 자동 맞춤: 인식 품질이 낮으면 90°/270°로 돌려서 더 잘 읽히는 쪽을 고름
 export async function recognizeAuto(canvas, onProgress, onStage) {
-  let best = { canvas, r: await recognize(canvas, onProgress) };
+  let best = { canvas, deg: 0, r: await recognize(canvas, onProgress) };
   if (best.r.conf >= 65 && best.r.words.length >= 4) return best;
   for (const deg of [90, 270]) {
     onStage?.(deg);
     const c = rotateCanvas(canvas, deg);
     const r = await recognize(c, onProgress);
-    if (r.score > best.r.score * 1.15) best = { canvas: c, r };
+    if (r.score > best.r.score * 1.15) best = { canvas: c, deg, r };
     if (best.r.conf >= 70) break;
   }
   return best;
+}
+
+// 잘라낸 캔버스 (x, y, w, h는 0~1 비율)
+export function cropCanvas(c, r) {
+  const sx = Math.round(r.x * c.width);
+  const sy = Math.round(r.y * c.height);
+  const sw = Math.max(10, Math.round(r.w * c.width));
+  const sh = Math.max(10, Math.round(r.h * c.height));
+  const out = document.createElement('canvas');
+  out.width = sw; out.height = sh;
+  out.getContext('2d').drawImage(c, sx, sy, sw, sh, 0, 0, sw, sh);
+  return out;
+}
+
+// 쪽수만 찾기: 고른 범위 바로 아래·위 띠와 사진 아래쪽을 따로 읽어 숫자를 찾음
+// (본문만 잘라내도 쪽수는 살리고, 본문 속 숫자는 무시)
+export async function findPageNumber(full, maxPage = 0, crop = { x: 0, y: 0, w: 1, h: 1 }) {
+  const clamp = (r) => {
+    const x = Math.max(0, r.x); const y = Math.max(0, r.y);
+    const w = Math.min(1, r.x + r.w) - x; const h = Math.min(1, r.y + r.h) - y;
+    return w > 0.05 && h > 0.03 ? { x, y, w, h } : null;
+  };
+  const bands = [
+    { r: clamp({ x: crop.x - 0.06, y: crop.y + crop.h - 0.02, w: crop.w + 0.12, h: 0.16 }), bonus: 25 },
+    { r: clamp({ x: crop.x - 0.06, y: crop.y - 0.12, w: crop.w + 0.12, h: 0.14 }), bonus: 10 },
+    { r: clamp({ x: 0, y: 0.75, w: 1, h: 0.25 }), bonus: 0 },
+  ].filter((b) => b.r);
+  // 작은 숫자를 잘 읽도록: 키우고, 흑백으로 또렷하게, 흰 여백 추가
+  const prep = (c, scale) => {
+    const pad = 30;
+    const u = document.createElement('canvas');
+    u.width = Math.round(c.width * scale) + pad * 2;
+    u.height = Math.round(c.height * scale) + pad * 2;
+    const x = u.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, u.width, u.height);
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(c, pad, pad, u.width - pad * 2, u.height - pad * 2);
+    const d = x.getImageData(0, 0, u.width, u.height);
+    const a = d.data;
+    let sum = 0;
+    for (let i = 0; i < a.length; i += 4) { const g = 0.3 * a[i] + 0.59 * a[i + 1] + 0.11 * a[i + 2]; a[i] = g; sum += g; }
+    const cut = (sum / (a.length / 4)) * 0.75;
+    for (let i = 0; i < a.length; i += 4) { const v = a[i] < cut ? 0 : 255; a[i] = a[i + 1] = a[i + 2] = v; }
+    x.putImageData(d, 0, 0);
+    return u;
+  };
+  const votes = new Map();
+  for (const b of bands) {
+    const c = cropCanvas(full, b.r);
+    const base = Math.min(3, Math.max(1, 900 / Math.max(c.width, 1)));
+    for (const scale of [base * 2, base * 3].map((v) => Math.min(v, 3.5))) {
+      const r = await recognize(prep(c, scale));
+      for (const w of r.words) {
+        const n = w.text.replace(/[^0-9]/g, '');
+        if (!n || n.length > 4 || n.length < w.text.length - 1) continue;
+        const v = +n;
+        if (!v || (maxPage && v > maxPage)) continue;
+        if (w.lineHangul > 4) continue; // 본문 줄 속 숫자(예: 2년)는 제외. 쪽수 줄은 '1부 113'처럼 글자가 적음
+        if (w.conf < 50 || (n.length === 1 && w.conf < 85)) continue; // 한 자리 숫자는 잡음이 많아서 아주 확실할 때만
+        votes.set(v, (votes.get(v) || 0) + w.conf + b.bonus + n.length * 10);
+      }
+    }
+    const top = Math.max(0, ...votes.values());
+    if (top >= 200) break;
+  }
+  const best = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] >= 130 ? best[0] : null; // 확실하지 않으면 비워두고 직접 적게
+}
+
+// 잘라낸 부분이 인식하기 좋은 크기가 되도록 (너무 크면 줄이고, 원본 해상도는 최대한 유지)
+export function fitForOcr(c, maxSide = 2200) {
+  const k = Math.min(1, maxSide / Math.max(c.width, c.height));
+  if (k === 1) return c;
+  const o = document.createElement('canvas');
+  o.width = Math.round(c.width * k); o.height = Math.round(c.height * k);
+  o.getContext('2d').drawImage(c, 0, 0, o.width, o.height);
+  return o;
 }

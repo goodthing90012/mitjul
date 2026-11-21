@@ -2,11 +2,11 @@
 import { db, uid } from './db.js';
 import { lookupISBN, searchTitle, cleanISBN, isISBN13, getKakaoKey } from './bookapi.js';
 import { startScan, decodeImageFile } from './scanner.js';
-import { fileToCanvas, recognize, recognizeAuto, rotateCanvas, joinWords } from './ocr.js';
+import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, fitForOcr, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
-import { Shelf, bookColor } from './shelf3d.js';
+import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.0.8';
+const APP_VERSION = '1.1.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -74,69 +74,81 @@ function openSheet(html, { full = false, onClose, cls = '' } = {}) {
   wrap.className = 'sheet-wrap';
   wrap.innerHTML = `<div class="sheet-bg"></div><div class="sheet ${full ? 'full' : ''} ${cls}"><div class="drag-zone" title="위로 올리면 전체 화면, 내리면 원래대로"><div class="sheet-grab"></div></div><button class="sheet-x" aria-label="닫기">✕</button><div class="sheet-body">${html}</div></div>`;
   $('#sheetRoot').append(wrap);
+  const sheet = wrap.querySelector('.sheet');
+  const sbody = wrap.querySelector('.sheet-body');
+  // 시트는 항상 화면 높이이고, 아래로 밀어둔 거리(--off)만 바꿔서 움직임 → GPU로 부드럽게
+  const naturalOff = () => {
+    const H = innerHeight;
+    if (full) return Math.round(H * 0.06);
+    const need = wrap.querySelector('.drag-zone').offsetHeight + sbody.offsetHeight + 28 + safeBottom();
+    return Math.round(Math.max(H * 0.08, H - need));
+  };
+  const apply = (expanded) => {
+    sheet.classList.toggle('expanded', expanded);
+    const off = expanded ? 0 : naturalOff();
+    setOff(sheet, off);
+    sheet.style.paddingBottom = `calc(${off}px + var(--safe-b) + 20px)`;
+  };
+  apply(false);
+  void sheet.offsetHeight;
   requestAnimationFrame(() => wrap.classList.add('on'));
+  // 내용이 바뀌면(스캔 결과 등) 높이 다시 맞추기
+  const ro = new ResizeObserver(() => { if (!sheet.classList.contains('expanded') && !sheet.classList.contains('dragging')) apply(false); });
+  ro.observe(sbody);
   const close = () => {
+    ro.disconnect();
     onClose?.();
     wrap.classList.remove('on');
-    setTimeout(() => wrap.remove(), 260);
+    setTimeout(() => wrap.remove(), 360);
   };
   pushLayer(close);
   wrap.querySelector('.sheet-bg').onclick = back;
   wrap.querySelector('.sheet-x').onclick = back;
-  const sheet = wrap.querySelector('.sheet');
-  bindDrag(wrap.querySelector('.drag-zone'), sheet, {
-    onUp: () => expandSheet(sheet),
-    onDown: (dy) => {
-      if (sheet.classList.contains('expanded')) collapseSheet(sheet);
-      else if (dy > 100) back();
-    },
+  bindDrag(wrap.querySelector('.drag-zone'), sheet, (dy, v) => {
+    const expanded = sheet.classList.contains('expanded');
+    if (expanded) apply(!(dy > 60 || v > 0.5));
+    else if (dy < -40 || v < -0.5) apply(true);
+    else if (dy > 110 || v > 0.8) back();
+    else apply(false);
   });
-  return wrap.querySelector('.sheet-body');
+  return sbody;
 }
 
-// 위쪽 손잡이를 위로 올리면 onUp, 아래로 내리면 onDown(거리)
-function bindDrag(zone, target, { onUp, onDown }) {
-  let y0 = null;
-  let dy = 0;
-  let pid = null;
+function safeBottom() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--safe-b-px');
+  return parseFloat(v) || 0;
+}
+function setOff(el, px) { el.style.setProperty('--off', px + 'px'); }
+function getOff(el) { return parseFloat(el.style.getPropertyValue('--off')) || 0; }
+
+// 손잡이를 끄는 동안 손가락을 1:1로 따라가고, 놓으면 onEnd(이동거리, 속도)로 자리 결정
+function bindDrag(zone, el, onEnd) {
+  let st = null;
   zone.addEventListener('pointerdown', (e) => {
     if (e.button > 0) return;
-    y0 = e.clientY; dy = 0; pid = e.pointerId;
-    try { zone.setPointerCapture(pid); } catch {}
-    target.style.transition = 'none';
+    st = { y: e.clientY, off: getOff(el), id: e.pointerId, lastY: e.clientY, lastT: performance.now(), v: 0 };
+    try { zone.setPointerCapture(e.pointerId); } catch {}
+    el.classList.add('dragging');
   });
   zone.addEventListener('pointermove', (e) => {
-    if (y0 == null || e.pointerId !== pid) return;
-    dy = e.clientY - y0;
-    target.style.transform = `translateY(${dy > 0 ? dy : dy / 4}px)`;
+    if (!st || e.pointerId !== st.id) return;
+    const now = performance.now();
+    const dt = Math.max(1, now - st.lastT);
+    st.v = 0.7 * ((e.clientY - st.lastY) / dt) + 0.3 * st.v; // 손을 놓을 때의 속도(플릭) 판단용
+    st.lastY = e.clientY; st.lastT = now;
+    const off = Math.min(innerHeight, Math.max(0, st.off + (e.clientY - st.y)));
+    setOff(el, off);
   });
   const end = (e) => {
-    if (y0 == null || e.pointerId !== pid) return;
-    y0 = null;
-    target.style.transition = '';
-    target.style.transform = '';
-    if (dy < -35) onUp?.();
-    else if (dy > 50) onDown?.(dy);
+    if (!st || e.pointerId !== st.id) return;
+    const dy = e.clientY - st.y;
+    const v = performance.now() - st.lastT > 120 ? 0 : st.v;
+    st = null;
+    el.classList.remove('dragging');
+    onEnd(dy, v);
   };
   zone.addEventListener('pointerup', end);
   zone.addEventListener('pointercancel', end);
-}
-
-function expandSheet(sheet) {
-  if (sheet.classList.contains('expanded')) return;
-  sheet.style.height = sheet.offsetHeight + 'px';
-  void sheet.offsetHeight;
-  sheet.classList.add('expanded');
-  sheet.style.height = '';
-}
-function collapseSheet(sheet) {
-  const full = sheet.offsetHeight;
-  sheet.classList.remove('expanded');
-  const natural = sheet.offsetHeight;
-  sheet.style.height = full + 'px';
-  void sheet.offsetHeight;
-  sheet.style.height = natural + 'px';
-  setTimeout(() => { sheet.style.height = ''; }, 320);
 }
 
 const icon = {
@@ -298,14 +310,14 @@ async function openBook(id, focusQuoteId) {
   state.graphPage = null;
   document.body.classList.add('book-open');
   $('#today').hidden = true;
-  $('#bookPanel').classList.remove('expanded');
+  setPanel(false);
   renderPanel();
   $('#bookPanel').hidden = false;
   requestAnimationFrame(() => $('#bookPanel').classList.add('on'));
   pushLayer(closeBookUI);
   if (focusQuoteId) setTimeout(() => focusQuote(focusQuoteId), 350);
   shelf.focusBook(id);
-  shelf.topFrac = Math.min(0.6, Math.max(0.3, $('#bookPanel').offsetTop / innerHeight));
+  shelf.topFrac = panelOff() / innerHeight;
   await shelf.openBook(id, leftPageCanvas(), rightPageCanvas());
 }
 
@@ -357,12 +369,23 @@ function linkNames(text, people) {
   });
 }
 
+// 책 패널: 기본은 화면 42% 지점, 펼치면 맨 위까지
+function panelOff() { return Math.round(innerHeight * (innerWidth >= 900 ? 0.44 : 0.42)); }
+function setPanel(expanded) {
+  const panel = $('#bookPanel');
+  panel.classList.toggle('expanded', expanded);
+  const off = expanded ? 0 : panelOff();
+  setOff(panel, off);
+  panel.style.paddingBottom = `calc(${off}px + var(--safe-b) + 90px)`;
+}
+addEventListener('resize', () => { if (state.current) setPanel($('#bookPanel').classList.contains('expanded')); });
+
 function renderPanel() {
   const { book, quotes, people } = state.current;
   const pages = bookPages(book, quotes);
   const cover = book.cover
     ? `<img class="bp-cover" src="${esc(book.cover)}" alt="" referrerpolicy="no-referrer">`
-    : `<div class="bp-cover ph" style="background:${bookColor(book.id + book.title)}">${esc([...book.title][0] || '')}</div>`;
+    : `<div class="bp-cover ph" style="background:${colorOf(book.id) || bookColor(book.id + book.title)}">${esc([...book.title][0] || '')}</div>`;
   const dots = quotes.map((q) => `<button class="pb-dot" data-q="${q.id}" style="left:${Math.min(100, ((q.page || 0) / pages) * 100)}%" title="p.${q.page}"></button>`).join('');
   $('#bookPanel').innerHTML = `
     <div class="drag-zone" id="bpDrag"><div class="bp-grab"></div></div>
@@ -392,9 +415,9 @@ function renderPanel() {
       : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button>`}</div>`;
 
   const panel = $('#bookPanel');
-  bindDrag($('#bpDrag'), panel, {
-    onUp: () => panel.classList.add('expanded'),
-    onDown: () => panel.classList.remove('expanded'),
+  bindDrag($('#bpDrag'), panel, (dy, v) => {
+    const expanded = panel.classList.contains('expanded');
+    setPanel(expanded ? !(dy > 60 || v > 0.5) : (dy < -40 || v < -0.5));
   });
   $('#bpStatus').onchange = async (e) => {
     book.status = e.target.value;
@@ -719,71 +742,152 @@ async function ocrSheet(file, onUse) {
   const body = openSheet(`
     <h3>문장 고르기</h3>
     <div class="ocr-status"><div class="bar"><i></i></div><span>사진 준비 중…</span></div>
-    <div class="ocr-stage" hidden><div class="ocr-img"></div></div>
-    <div class="ocr-tools" hidden><p class="hint">형광펜처럼 <b>문장 위를 손가락으로 쭉 그으세요</b>. 다시 그으면 새로 골라져요.</p><button class="ghost" id="ocrRotate" type="button">↻ 돌리기</button></div>
-    <div class="ocr-pick" hidden><div class="ocr-page"></div><div class="ocr-text"></div></div>
-    <div class="btn-row"><button class="ghost" id="ocrAll" disabled>전체 쓰기</button><button class="primary" id="ocrUse" disabled>이 문장 쓰기</button></div>`, { full: true });
+    <div class="crop-step" hidden>
+      <p class="hint">읽을 부분만 남기세요. 모서리·변을 끌어 조절해요. <b>옆 페이지는 빼면</b> 훨씬 정확해요.</p>
+      <div class="crop-wrap"><img alt=""><div class="crop-box">${['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((h) => `<i class="ch ch-${h}" data-h="${h}"></i>`).join('')}</div></div>
+      <div class="btn-row"><button class="ghost" id="cropRotate" type="button">↻ 돌리기</button><button class="ghost" id="cropAll" type="button">전체 읽기</button><button class="primary" id="cropGo" type="button">이 범위 읽기</button></div>
+    </div>
+    <div class="pick-step" hidden>
+      <div class="ocr-stage"><div class="ocr-img"></div></div>
+      <div class="ocr-tools"><p class="hint">형광펜처럼 <b>문장 위를 손가락으로 쭉 그으세요</b>. 다시 그으면 새로 골라져요.</p><button class="ghost" id="ocrRecrop" type="button">✂ 범위 다시</button></div>
+      <div class="ocr-pick"><div class="ocr-page"></div><div class="ocr-text"></div></div>
+      <div class="btn-row"><button class="ghost" id="ocrAll" disabled>전체 쓰기</button><button class="primary" id="ocrUse" disabled>이 문장 쓰기</button></div>
+    </div>`, { full: true });
   const status = $('.ocr-status span', body);
   const bar = $('.ocr-status i', body);
   const stage = $('.ocr-img', body);
+  const maxPage = state.current?.book?.pages || 0;
+  let src = null; // 원본(방향 보정된) 사진
+  let crop = { x: 0.04, y: 0.04, w: 0.92, h: 0.92 };
   let result = null;
   let canvas = null;
+  let page = null;
   let sel = [];
   let busy = false;
 
+  const step = (name) => {
+    $('.ocr-status', body).hidden = name !== 'status';
+    $('.crop-step', body).hidden = name !== 'crop';
+    $('.pick-step', body).hidden = name !== 'pick';
+  };
+  const fitBox = (el, w, h, hFrac) => {
+    const maxH = Math.round(innerHeight * hFrac);
+    const maxW = body.clientWidth || innerWidth - 36;
+    const k = Math.min(maxW / w, maxH / h);
+    el.style.width = Math.round(w * k) + 'px';
+    el.style.height = Math.round(h * k) + 'px';
+  };
   const progress = (m) => {
     if (m.status === 'recognizing text') { bar.style.width = Math.round(m.progress * 100) + '%'; status.textContent = `글자 읽는 중 ${Math.round(m.progress * 100)}%`; }
     else if (/load|initializ/.test(m.status)) status.textContent = '한글 인식 준비 중… (처음 한 번은 조금 걸려요)';
   };
-  const showLoading = (msg) => {
-    $('.ocr-status', body).hidden = false;
-    $('.ocr-stage', body).hidden = true;
-    $('.ocr-tools', body).hidden = true;
-    $('.ocr-pick', body).hidden = true;
-    $('#ocrAll', body).disabled = true;
-    $('#ocrUse', body).disabled = true;
-    bar.style.width = '3%';
-    status.textContent = msg;
-  };
-  const show = () => {
-    const url = canvas.toDataURL('image/jpeg', 0.85);
-    // 세로·가로 사진 모두 화면 안에 비율 그대로 들어가게
-    const maxH = Math.round(innerHeight * 0.56);
-    const maxW = body.clientWidth || innerWidth - 36;
-    const k = Math.min(maxW / result.width, maxH / result.height);
-    stage.style.width = Math.round(result.width * k) + 'px';
-    stage.style.height = Math.round(result.height * k) + 'px';
-    stage.innerHTML = `<img src="${url}" alt="">` + result.words.map((w) => {
-      const b = w.bbox;
-      return `<i class="wbox" data-i="${w.i}" style="left:${(b.x0 / result.width) * 100}%;top:${(b.y0 / result.height) * 100}%;width:${((b.x1 - b.x0) / result.width) * 100}%;height:${((b.y1 - b.y0) / result.height) * 100}%"></i>`;
-    }).join('');
-    $('.ocr-status', body).hidden = true;
-    $('.ocr-stage', body).hidden = false;
-    $('.ocr-tools', body).hidden = false;
-    $('.ocr-pick', body).hidden = false;
-    $('#ocrAll', body).disabled = !result.words.length;
-    $('.ocr-page', body).textContent = result.page ? `쪽수 p.${result.page} 로 보여요` : '쪽수는 못 찾았어요';
-    sel = [];
-    paint();
-    if (!result.words.length) $('.ocr-text', body).textContent = '글자를 찾지 못했어요. 밝은 곳에서 페이지를 평평하게 찍거나 ↻ 돌리기를 눌러보세요.';
-    else if (result.conf < 45) $('.ocr-text', body).innerHTML = '<span class="muted">글자가 이상하게 읽혔다면 ↻ 돌리기로 사진 방향을 맞춰보세요.</span>';
-  };
 
-  const run = async (c, auto) => {
+  /* ---- 1단계: 범위 고르기 ---- */
+  const cropWrap = $('.crop-wrap', body);
+  const cropBox = $('.crop-box', body);
+  const drawCrop = () => {
+    Object.assign(cropBox.style, { left: crop.x * 100 + '%', top: crop.y * 100 + '%', width: crop.w * 100 + '%', height: crop.h * 100 + '%' });
+  };
+  const showCrop = () => {
+    $('img', cropWrap).src = fitForOcr(src, 1400).toDataURL('image/jpeg', 0.85);
+    fitBox(cropWrap, src.width, src.height, 0.6);
+    drawCrop();
+    step('crop');
+  };
+  let drag = null;
+  cropWrap.addEventListener('pointerdown', (e) => {
+    const h = e.target.dataset.h || (e.target === cropBox ? 'move' : null);
+    if (!h) return;
+    e.preventDefault();
+    cropWrap.setPointerCapture(e.pointerId);
+    drag = { h, x: e.clientX, y: e.clientY, start: { ...crop } };
+  });
+  cropWrap.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = cropWrap.getBoundingClientRect();
+    const dx = (e.clientX - drag.x) / r.width;
+    const dy = (e.clientY - drag.y) / r.height;
+    const s0 = drag.start;
+    const MIN = 0.08;
+    let { x, y, w, h } = s0;
+    if (drag.h === 'move') {
+      x = Math.min(1 - w, Math.max(0, s0.x + dx));
+      y = Math.min(1 - h, Math.max(0, s0.y + dy));
+    } else {
+      if (drag.h.includes('w')) { const nx = Math.min(s0.x + s0.w - MIN, Math.max(0, s0.x + dx)); w = s0.w + (s0.x - nx); x = nx; }
+      if (drag.h.includes('e')) w = Math.min(1 - s0.x, Math.max(MIN, s0.w + dx));
+      if (drag.h.includes('n')) { const ny = Math.min(s0.y + s0.h - MIN, Math.max(0, s0.y + dy)); h = s0.h + (s0.y - ny); y = ny; }
+      if (drag.h.includes('s')) h = Math.min(1 - s0.y, Math.max(MIN, s0.h + dy));
+    }
+    crop = { x, y, w, h };
+    drawCrop();
+  });
+  const endDrag = () => { drag = null; };
+  cropWrap.addEventListener('pointerup', endDrag);
+  cropWrap.addEventListener('pointercancel', endDrag);
+
+  $('#cropRotate', body).onclick = () => {
+    src = rotateCanvas(src, 90);
+    crop = { x: crop.y, y: 1 - crop.x - crop.w, w: crop.h, h: crop.w }; // 범위도 같이 회전
+    crop = { x: 1 - crop.x - crop.w, y: crop.y, w: crop.w, h: crop.h };
+    showCrop();
+  };
+  $('#cropAll', body).onclick = () => { crop = { x: 0, y: 0, w: 1, h: 1 }; read(); };
+  $('#cropGo', body).onclick = () => read();
+
+  /* ---- 2단계: 읽고 문장 고르기 ---- */
+  const read = async () => {
+    if (busy) return;
     busy = true;
+    step('status');
+    bar.style.width = '3%';
+    status.textContent = '글자 읽는 중…';
     try {
-      showLoading('글자 읽는 중…');
-      if (auto) {
-        const best = await recognizeAuto(c, progress, () => { status.textContent = '사진 방향 맞추는 중…'; bar.style.width = '3%'; });
-        canvas = best.canvas; result = best.r;
-      } else {
-        canvas = c; result = await recognize(c, progress);
-      }
-      show();
+      const part = fitForOcr(cropCanvas(src, crop));
+      const best = await recognizeAuto(part, progress, () => { status.textContent = '사진 방향 맞추는 중…'; bar.style.width = '3%'; });
+      canvas = best.canvas; result = best.r;
+      page = result.page && result.page <= (maxPage || 99999) ? result.page : null;
+      showPick();
+      // 본문만 잘라낸 경우에도 쪽수는 원본 사진 위·아래에서 찾기
+      $('.ocr-page', body).textContent = page ? `쪽수 p.${page} 로 보여요` : '쪽수 찾는 중…';
+      const full = fitForOcr(best.deg ? rotateCanvas(src, best.deg) : src);
+      const found = await findPageNumber(full, maxPage, best.deg ? { x: 0, y: 0, w: 1, h: 1 } : crop).catch(() => null);
+      if (found) page = found;
+      $('.ocr-page', body).textContent = page ? `쪽수 p.${page} 로 보여요` : '쪽수는 못 찾았어요 · 직접 적어주세요';
     } catch (e) {
       status.textContent = '글자를 읽지 못했어요: ' + e.message;
     }
     busy = false;
+  };
+
+  let blkCols = new Map();
+  const showPick = () => {
+    const url = canvas.toDataURL('image/jpeg', 0.85);
+    fitBox(stage, result.width, result.height, 0.5);
+    stage.innerHTML = `<img src="${url}" alt="">` + result.words.map((w) => {
+      const b = w.bbox;
+      return `<i class="wbox" data-i="${w.i}" style="left:${(b.x0 / result.width) * 100}%;top:${(b.y0 / result.height) * 100}%;width:${((b.x1 - b.x0) / result.width) * 100}%;height:${((b.y1 - b.y0) / result.height) * 100}%"></i>`;
+    }).join('');
+    // 블록별 가로 범위 (다른 단·옆 페이지가 선택에 섞이지 않게)
+    blkCols = new Map();
+    for (const w of result.words) {
+      const c = blkCols.get(w.blk) || { x0: Infinity, x1: -Infinity };
+      c.x0 = Math.min(c.x0, w.bbox.x0); c.x1 = Math.max(c.x1, w.bbox.x1);
+      blkCols.set(w.blk, c);
+    }
+    step('pick');
+    $('#ocrAll', body).disabled = !result.words.length;
+    sel = [];
+    paint();
+    if (!result.words.length) $('.ocr-text', body).textContent = '글자를 찾지 못했어요. ✂ 범위 다시에서 ↻ 돌리기로 방향을 맞추거나 범위를 좁혀보세요.';
+    else if (result.conf < 45) $('.ocr-text', body).innerHTML = '<span class="muted">글자가 이상하게 읽혔다면 ✂ 범위 다시에서 방향과 범위를 맞춰보세요.</span>';
+  };
+  const sameColumn = (a, b) => {
+    if (a === b) return true;
+    const A = blkCols.get(a); const B = blkCols.get(b);
+    if (!A || !B) return true;
+    const overlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+    return overlap > 0.5 * Math.min(A.x1 - A.x0, B.x1 - B.x0);
   };
 
   const hitWord = (e) => {
@@ -820,22 +924,22 @@ async function ocrSheet(file, onUse) {
   stage.addEventListener('pointermove', (e) => {
     if (!startW) return;
     const w = hitWord(e);
-    if (!w) return;
+    if (!w || !sameColumn(startW.blk, w.blk)) return;
     const a = Math.min(startW.i, w.i); const b = Math.max(startW.i, w.i);
-    sel = result.words.filter((x) => x.i >= a && x.i <= b);
+    sel = result.words.filter((x) => x.i >= a && x.i <= b && sameColumn(startW.blk, x.blk));
     paint();
   });
   const up = () => { startW = null; };
   stage.addEventListener('pointerup', up);
   stage.addEventListener('pointercancel', up);
 
-  $('#ocrRotate', body).onclick = () => { if (!busy && canvas) run(rotateCanvas(canvas, 90), false); };
-  $('#ocrUse', body).onclick = async () => { onUse(joinWords(sel), result.page); await closeTop(); };
-  $('#ocrAll', body).onclick = async () => { onUse(joinWords(result.words.filter((w) => !/^\d+$/.test(w.text) || w.text !== String(result.page))), result.page); await closeTop(); };
+  $('#ocrRecrop', body).onclick = () => { if (!busy) showCrop(); };
+  $('#ocrUse', body).onclick = async () => { onUse(joinWords(sel), page); await closeTop(); };
+  $('#ocrAll', body).onclick = async () => { onUse(joinWords(result.words.filter((w) => w.text !== String(page))), page); await closeTop(); };
 
   try {
-    const c = await fileToCanvas(file);
-    await run(c, true);
+    src = await fileToCanvas(file, 3200); // 원본 해상도 최대한 유지 (작은 글씨 인식용)
+    showCrop();
   } catch (e) {
     status.textContent = '사진을 열지 못했어요: ' + e.message;
   }

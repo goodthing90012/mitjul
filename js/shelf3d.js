@@ -20,6 +20,10 @@ export function hash(s) {
   for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
+// 책 표지 색: 서로 잘 구분되는 색 목록에서 고르고, 바로 옆 책과는 겹치지 않게
+export const BOOK_COLORS = ['#7a2e2a', '#2f4a6b', '#3d6b4f', '#b5813a', '#5b3a6b', '#2d6a6e', '#a0522d', '#45494f', '#b0605a', '#6b7a2f', '#8a3d5c', '#3b5f8a'];
+const assignedColors = new Map();
+export function colorOf(id) { return assignedColors.get(id); }
 export function bookColor(seed) {
   const h = hash(seed);
   return `hsl(${h % 360}, ${32 + ((h >> 9) % 28)}%, ${28 + ((h >> 17) % 22)}%)`;
@@ -415,8 +419,15 @@ export class Shelf {
       this.caseGroup.add(label);
 
       let x = -W / 2 + 0.45;
+      let prevIdx = -1;
+      let prev2Idx = -1;
       items[ri].forEach(({ b, dims }) => {
-        const g = this._buildBook(b, dims);
+        let idx = hash(b.id) % BOOK_COLORS.length;
+        while (idx === prevIdx || idx === prev2Idx) idx = (idx + 1) % BOOK_COLORS.length;
+        prev2Idx = prevIdx;
+        prevIdx = idx;
+        assignedColors.set(b.id, BOOK_COLORS[idx]);
+        const g = this._buildBook(b, dims, BOOK_COLORS[idx]);
         g.position.set(x + dims.t / 2, base + dims.h / 2 + 0.002, CASE_D / 2 - dims.d / 2 - 0.06);
         g.userData.home = { pos: g.position.clone(), quat: g.quaternion.clone() };
         this.scene.add(g);
@@ -430,9 +441,8 @@ export class Shelf {
     this.dirty = true;
   }
 
-  _buildBook(b, dims) {
+  _buildBook(b, dims, color) {
     const { h, t, d, c } = dims;
-    const color = bookColor(b.id + b.title);
     const coverMat = new THREE.MeshStandardMaterial({ color, roughness: 0.65 });
     const spineMat = new THREE.MeshStandardMaterial({ map: canvasTex(spineCanvas(b, dims, color)), roughness: 0.6 });
     const outerMat = new THREE.MeshStandardMaterial({ map: canvasTex(coverCanvas(b, dims, color)), roughness: 0.6 });
