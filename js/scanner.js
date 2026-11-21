@@ -3,6 +3,22 @@
 import { isISBN13 } from './bookapi.js';
 
 const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm';
+const ZXING_LIB_URL = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm';
+
+// EAN-13만, 더 꼼꼼하게(TRY_HARDER) 찾는 zxing 리더
+let zxReaderP = null;
+function zxReader() {
+  if (!zxReaderP) {
+    zxReaderP = Promise.all([import(ZXING_URL), import(ZXING_LIB_URL)]).then(([br, lib]) => {
+      const hints = new Map([
+        [lib.DecodeHintType.POSSIBLE_FORMATS, [lib.BarcodeFormat.EAN_13]],
+        [lib.DecodeHintType.TRY_HARDER, true],
+      ]);
+      return new br.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 120 });
+    }).catch((e) => { zxReaderP = null; throw e; });
+  }
+  return zxReaderP;
+}
 
 async function nativeDetector() {
   if (!('BarcodeDetector' in window)) return null;
@@ -89,9 +105,8 @@ export async function startScan(video, onCode) {
     };
     loop();
   } else {
-    const { BrowserMultiFormatReader } = await import(ZXING_URL);
+    const reader = await zxReader();
     if (stopped) return stop;
-    const reader = new BrowserMultiFormatReader();
     zxControls = await reader.decodeFromVideoElement(video, (res) => {
       if (res) found(res.getText());
     });
@@ -101,29 +116,45 @@ export async function startScan(video, onCode) {
 }
 
 // 사진 파일에서 바코드 읽기 (폰 기본 카메라 앱의 자동초점을 쓰는 방법)
+// 여러 크기, 가운데 잘라내기, 90도 회전까지 시도. 기본 인식기가 실패하면 zxing으로 한 번 더
 export async function decodeImageFile(file) {
   const bmp = await createImageBitmap(file);
-  // 너무 큰 사진은 줄이고, 작게도 한 번 더 시도
-  const sizes = [1600, 1000];
   const det = await nativeDetector();
   let zx = null;
-  for (const maxSide of sizes) {
-    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  try { zx = await zxReader(); } catch {}
+
+  const variants = [];
+  const make = (maxSide, crop = null, rotate = false) => {
+    const sx = crop ? bmp.width * crop[0] : 0;
+    const sy = crop ? bmp.height * crop[1] : 0;
+    const sw = crop ? bmp.width * crop[2] : bmp.width;
+    const sh = crop ? bmp.height * crop[3] : bmp.height;
+    const scale = Math.min(1, maxSide / Math.max(sw, sh));
+    const w = Math.round(sw * scale);
+    const h = Math.round(sh * scale);
     const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * scale);
-    c.height = Math.round(bmp.height * scale);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    c.width = rotate ? h : w;
+    c.height = rotate ? w : h;
+    const x = c.getContext('2d');
+    if (rotate) { x.translate(h, 0); x.rotate(Math.PI / 2); }
+    x.drawImage(bmp, sx, sy, sw, sh, 0, 0, w, h);
+    return c;
+  };
+  variants.push(() => make(1600));
+  variants.push(() => make(2400));
+  variants.push(() => make(1600, [0.1, 0.25, 0.8, 0.5])); // 가운데 띠
+  variants.push(() => make(1000));
+  variants.push(() => make(1600, null, true)); // 세로로 찍힌 바코드
+
+  for (const v of variants) {
+    const c = v();
     if (det) {
       try {
-        const codes = await det.detect(c);
-        const hit = codes.find((x) => isISBN13(x.rawValue));
+        const hit = (await det.detect(c)).find((x) => isISBN13(x.rawValue));
         if (hit) return hit.rawValue;
       } catch {}
-    } else {
-      if (!zx) {
-        const { BrowserMultiFormatReader } = await import(ZXING_URL);
-        zx = new BrowserMultiFormatReader();
-      }
+    }
+    if (zx) {
       try {
         const res = zx.decodeFromCanvas(c);
         if (res && isISBN13(res.getText())) return res.getText();

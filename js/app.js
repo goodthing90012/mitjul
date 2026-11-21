@@ -6,7 +6,7 @@ import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.0.4';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -56,12 +56,17 @@ addEventListener('popstate', () => {
 
 /* ================= 공통 UI ================= */
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
+  // 글자 수에 맞춰 충분히 보여주기 (최소 3.5초), 누르면 닫힘
+  toastTimer = setTimeout(() => t.classList.remove('on'), ms || Math.max(3500, msg.length * 120));
+  t.onclick = () => t.classList.remove('on');
+}
+function notice(el, html, kind = 'warn') {
+  el.innerHTML = `<div class="notice ${kind}">${html}</div>`;
 }
 
 function openSheet(html, { full = false, onClose, cls = '' } = {}) {
@@ -733,9 +738,7 @@ function addBookSheet() {
     results.innerHTML = '<div class="loading">책 정보를 찾는 중…</div>';
     const info = await lookupISBN(isbn).catch(() => null);
     if (!info) {
-      results.innerHTML = '';
-      toast('정보를 못 찾았어요. 직접 입력해 주세요');
-      confirmBook({ isbn, title: '', authors: [], pages: 0, cover: '' });
+      confirmBook({ isbn, title: '', authors: [], pages: 0, cover: '', notFound: true });
       return;
     }
     confirmBook(info);
@@ -776,8 +779,10 @@ function addBookSheet() {
     results.innerHTML = '<div class="loading">사진에서 바코드 찾는 중…</div>';
     const code = await decodeImageFile(f).catch(() => null);
     if (code) { navigator.vibrate?.(60); lookup(code); return; }
-    results.innerHTML = '';
-    toast('바코드를 못 찾았어요. 바코드가 크게 나오게 다시 찍어주세요');
+    notice(results, `<b>사진에서 바코드를 못 읽었어요.</b><br>
+      · 바코드가 사진 가로폭의 절반 이상 차게, 비스듬하지 않게 찍어주세요<br>
+      · 반사광이 바코드를 가리지 않게 조명 각도를 바꿔보세요<br>
+      · 그래도 안 되면 바코드 아래 숫자(978… / 979…)를 위 ISBN 칸에 입력하세요`);
   };
   $('#isbnGo', body).onclick = () => {
     const v = cleanISBN($('#isbnIn', body).value);
@@ -809,7 +814,8 @@ function addBookSheet() {
     stopScan?.(); stopScan = null;
     const dup = info.isbn && state.books.find((b) => b.isbn === info.isbn);
     body.innerHTML = `
-      <h3>이 책이 맞나요?</h3>
+      <h3>${info.notFound ? '책 정보를 직접 넣어주세요' : '이 책이 맞나요?'}</h3>
+      ${info.notFound ? `<div class="notice warn"><b>바코드는 읽었어요 (ISBN ${esc(info.isbn)})</b><br>그런데 ${getKakaoKey() ? '연결된 곳들에' : '구글 북스·오픈 라이브러리에'} 이 책 정보가 없어요.${getKakaoKey() ? '' : ' 국내 책은 <b>설정 → 카카오 REST 키</b>를 넣으면 대부분 찾아져요.'} 지금은 아래에 제목만 적어도 꽂을 수 있어요.</div>` : ''}
       ${dup ? '<p class="warn">이미 책장에 있는 책이에요.</p>' : ''}
       <div class="confirm">
         ${info.cover ? `<img src="${esc(info.cover)}" alt="" referrerpolicy="no-referrer">` : '<div class="noimg big"></div>'}

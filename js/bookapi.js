@@ -63,20 +63,38 @@ async function kakao(params) {
   return (j.documents || []).map(fromKakao);
 }
 
+// 오픈 라이브러리 (키 없음, 해외 책 위주)
+async function openLibrary(isbn) {
+  const r = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`);
+  if (!r.ok) throw new Error('ol ' + r.status);
+  const d = (await r.json())['ISBN:' + isbn];
+  if (!d) return [];
+  return [{
+    title: d.title + (d.subtitle ? ': ' + d.subtitle : ''),
+    authors: (d.authors || []).map((a) => a.name),
+    pages: d.number_of_pages || 0,
+    cover: d.cover?.medium || '',
+    publisher: d.publishers?.[0]?.name || '',
+    isbn,
+  }];
+}
+
 const settle = (p) => p.then((v) => v, () => []);
 
 // ISBN 하나로 조회. 한국 책은 카카오 정보(제목·표지)를 우선하고 쪽수는 구글에서 채움
 export async function lookupISBN(raw) {
   const isbn = cleanISBN(raw);
-  const [g, k] = await Promise.all([settle(google('isbn:' + isbn)), settle(kakao({ target: 'isbn', query: isbn }))]);
-  const gi = g[0];
+  const [g, k, o] = await Promise.all([
+    settle(google('isbn:' + isbn)), settle(kakao({ target: 'isbn', query: isbn })), settle(openLibrary(isbn)),
+  ]);
+  const gi = g[0] || o[0];
   const ki = k[0];
   if (!gi && !ki) return null;
   const base = ki || gi;
   return {
     title: base.title || gi?.title || '',
     authors: base.authors?.length ? base.authors : (gi?.authors || []),
-    pages: gi?.pages || 0,
+    pages: gi?.pages || o[0]?.pages || 0,
     cover: ki?.cover || gi?.cover || '',
     publisher: base.publisher || gi?.publisher || '',
     isbn,

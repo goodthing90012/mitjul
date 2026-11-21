@@ -257,3 +257,7 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 .scan-tools .torch { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.25); font-size: 18px; margin-left: auto; }
 .scan-tools .torch.on { background: #f2c94c; }
 .sheet .photo-scan { display: flex; margin-top: 10px; }
+
+.notice { border-radius: 12px; padding: 12px 14px; font-size: 13.5px; line-height: 1.65; margin: 10px 0; }
+.notice.warn { background: #fbeee3; border: 1px solid #ecc6ad; color: #6a3a22; }
+#toast { white-space: normal; text-align: center; pointer-events: auto; }
