@@ -6,7 +6,7 @@ import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.4';
+const APP_VERSION = '1.0.5';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
