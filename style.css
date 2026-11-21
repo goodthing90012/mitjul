@@ -363,3 +363,16 @@ body.book-open #btnBack { display: inline-flex; }
 #bookPanel.expanded { top: 0; }
 #bookPanel .bp-actions { transform: translateY(calc(-1 * var(--off, 42vh))); transition: transform .36s cubic-bezier(.22, .9, .3, 1); }
 #bookPanel:not(.on) .bp-actions { transform: none; transition: none; }
+
+/* 붙여넣기·복사 안내 */
+.ocr-btns .ghost { flex: 1; min-width: 0; padding: 0 8px; gap: 5px; font-size: 14.5px; }
+.ocr-btns { margin-bottom: 8px; }
+.howto { margin: 0 0 14px; font-size: 13px; color: var(--muted); background: var(--paper2); border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; }
+.howto summary { min-height: 40px; display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--ink); cursor: pointer; list-style: none; }
+.howto summary::-webkit-details-marker { display: none; }
+.howto summary::before { content: '▸'; color: var(--accent); }
+.howto[open] summary::before { content: '▾'; }
+.howto summary small { font-weight: 400; color: #9a8f84; }
+.howto ol { margin: 0 0 6px; padding-left: 18px; line-height: 1.7; }
+.howto p { margin: 0 0 10px; line-height: 1.6; }
+blockquote.shared { margin: 0 0 14px; font-family: var(--serif); font-size: 15px; line-height: 1.7; }

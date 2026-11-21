@@ -6,7 +6,7 @@ import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, 
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -156,6 +156,7 @@ const icon = {
   gear: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   camera: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 18 5-5 3 3 2-2 4 4"/></svg>',
+  paste: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 12h6M9 16h4"/></svg>',
   barcode: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6v12M7 6v12M11 6v12M14 6v12M18 6v12M20 6v12"/></svg>',
 };
 
@@ -690,15 +691,41 @@ async function afterChange() {
 }
 
 /* ================= 글귀 ================= */
-function quoteSheet(q) {
+// 폰(구글 렌즈·갤러리 글자 인식·라이브 텍스트)에서 복사한 글을 정리: 줄바꿈 합치고, 혼자 있는 숫자 줄은 쪽수로
+// 낱말 끝에 자주 오는 글자(조사·어미). 줄 끝 글자가 이 중 하나면 낱말이 끝난 것으로 보고 띄움
+const WORD_END = /[다요고는은을를이가에의도로서며면지게와과께만나데니네죠군걸것듯랑한할된될던운울인일적들럼야여아어며든도록]/;
+function cleanPasted(raw) {
+  const lines = String(raw || '').replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  let page = 0;
+  let out = '';
+  for (const l of lines) {
+    if (/^\d{1,4}$/.test(l)) { if (!page) page = +l; continue; }
+    if (!out) out = l;
+    else if (/[a-z]-$/i.test(out) && /^[a-z]/i.test(l)) out = out.slice(0, -1) + l; // 영어 하이픈 줄바꿈
+    else if (/[가-힣]$/.test(out) && /^[가-힣]/.test(l) && !WORD_END.test(out.slice(-1))) out += l; // 한글 책은 낱말 중간에서도 줄이 바뀜 → 붙이기
+    else out += ' ' + l;
+  }
+  return { text: out.replace(/\s+/g, ' ').trim(), page };
+}
+
+function quoteSheet(q, prefill) {
   const isNew = !q;
-  q = q ? { ...q } : { id: uid(), bookId: state.current.book.id, createdAt: Date.now(), tags: [] };
+  q = q ? { ...q } : { id: uid(), bookId: state.current.book.id, createdAt: Date.now(), tags: [], text: prefill?.text || '', page: prefill?.page || 0 };
   const body = openSheet(`
     <h3>${isNew ? '밑줄 긋기' : '밑줄 고치기'}</h3>
     <div class="ocr-btns">
-      <label class="ghost">${icon.camera} 사진 찍기<input type="file" accept="image/*" capture="environment" id="qCam" hidden></label>
-      <label class="ghost">${icon.image} 앨범에서<input type="file" accept="image/*" id="qAlbum" hidden></label>
+      <label class="ghost">${icon.camera} 사진<input type="file" accept="image/*" capture="environment" id="qCam" hidden></label>
+      <label class="ghost">${icon.image} 앨범<input type="file" accept="image/*" id="qAlbum" hidden></label>
+      <button class="ghost" id="qPaste" type="button">${icon.paste} 붙여넣기</button>
     </div>
+    <details class="howto"><summary>폰에서 글자 복사하는 법 <small>사진 인식보다 정확해요</small></summary>
+      <ol>
+        <li><b>갤러리(삼성)</b>: 책 사진을 열고 아래 <b>T</b> 버튼 → 문장 선택 → 복사</li>
+        <li><b>구글 렌즈</b>: 카메라로 비추고 <b>텍스트</b> → 문장 선택 → 복사<br><small>홈 화면에 추가한 밑줄서재라면 복사 대신 <b>공유 → 밑줄서재</b>로 바로 보낼 수 있어요</small></li>
+        <li><b>아이폰</b>: 사진 앱이나 카메라에서 글자를 길게 눌러 선택 → 복사</li>
+      </ol>
+      <p>그다음 여기서 <b>붙여넣기</b>를 누르면 줄바꿈을 정리하고, 쪽수만 있는 줄은 쪽 칸에 넣어요.</p>
+    </details>
     <label>쪽<input id="qPage" type="number" inputmode="numeric" value="${q.page || ''}" placeholder="몇 쪽?"></label>
     <label>글귀<textarea id="qText" rows="4" placeholder="마음에 남은 문장">${esc(q.text || '')}</textarea></label>
     <label>내 생각 <small>선택</small><textarea id="qNote" rows="2">${esc(q.note || '')}</textarea></label>
@@ -713,6 +740,32 @@ function quoteSheet(q) {
       if (page && !$('#qPage', body).value) $('#qPage', body).value = page;
     });
   };
+  const putText = (raw) => {
+    const { text, page } = cleanPasted(raw);
+    if (!text) return false;
+    const t = $('#qText', body);
+    t.value = t.value.trim() ? t.value.trim() + ' ' + text : text;
+    if (page && !$('#qPage', body).value) $('#qPage', body).value = page;
+    t.dispatchEvent(new Event('input'));
+    return true;
+  };
+  $('#qPaste', body).onclick = async () => {
+    try {
+      const raw = await navigator.clipboard.readText();
+      if (!putText(raw)) toast('복사된 글자가 없어요. 먼저 사진에서 문장을 복사해 주세요');
+      else toast('붙여넣었어요. 틀린 글자만 고쳐주세요');
+    } catch {
+      $('#qText', body).focus();
+      toast('글귀 칸을 길게 눌러 붙여넣기 해주세요');
+    }
+  };
+  // 글귀 칸에 직접 붙여넣을 때도 여러 줄이면 같은 방식으로 정리
+  $('#qText', body).addEventListener('paste', (e) => {
+    const raw = e.clipboardData?.getData('text') || '';
+    if (!raw.includes('\n')) return;
+    e.preventDefault();
+    putText(raw);
+  });
   $('#qCam', body).onchange = onFile;
   $('#qAlbum', body).onchange = onFile;
   if (isNew) setTimeout(() => $('#qPage', body).focus(), 300);
@@ -1257,6 +1310,28 @@ function settingsSheet() {
   };
 }
 
+/* ================= 다른 앱에서 공유받기 (구글 렌즈 → 공유 → 밑줄서재) ================= */
+function handleShared() {
+  const sp = new URLSearchParams(location.search);
+  const raw = [sp.get('text'), sp.get('title')].filter(Boolean).join('\n');
+  if (!raw) return;
+  history.replaceState(null, '', location.pathname);
+  const { text, page } = cleanPasted(raw.replace(/https?:\/\/\S+/g, ''));
+  if (!text) return;
+  if (!state.books.length) { toast('먼저 책을 꽂은 뒤 다시 공유해 주세요'); return; }
+  const order = { reading: 0, want: 1, done: 2 };
+  const books = [...state.books].sort((a, b) => (order[a.status || 'reading'] - order[b.status || 'reading']) || b.createdAt - a.createdAt);
+  const body = openSheet(`
+    <h3>어느 책의 밑줄인가요?</h3>
+    <blockquote class="shared"><span class="hl">${esc(text.slice(0, 160))}${text.length > 160 ? '…' : ''}</span></blockquote>
+    <div class="pick-books">${books.map((b) => `<button class="res" data-id="${b.id}">${b.cover ? `<img src="${esc(b.cover)}" alt="" referrerpolicy="no-referrer">` : `<div class="noimg" style="background:${colorOf(b.id) || bookColor(b.id + b.title)}"></div>`}<div><b>${esc(b.title)}</b><small>${STATUS[b.status || 'reading']}</small></div></button>`).join('')}</div>`);
+  $$('.pick-books .res', body).forEach((el) => (el.onclick = async () => {
+    await closeTop();
+    await openBook(el.dataset.id);
+    quoteSheet(null, { text, page });
+  }));
+}
+
 /* ================= 시작 ================= */
 async function init() {
   $('#btnSearch').innerHTML = icon.search;
@@ -1287,6 +1362,8 @@ async function init() {
     return;
   }
   await reloadShelf();
+
+  handleShared();
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
