@@ -221,7 +221,7 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 .ocr-status .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
 .ocr-status .bar i { display: block; height: 100%; width: 3%; background: var(--accent); transition: width .2s; }
 .ocr-stage { display: flex; justify-content: center; }
-.ocr-img { position: relative; max-height: 56vh; max-width: 100%; height: 56vh; touch-action: none; user-select: none; -webkit-user-select: none; }
+.ocr-img { position: relative; touch-action: none; user-select: none; -webkit-user-select: none; }
 .ocr-img img { width: 100%; height: 100%; display: block; border-radius: 8px; pointer-events: none; }
 .wbox { position: absolute; border-radius: 3px; }
 .wbox.on { background: rgba(242, 201, 76, .55); mix-blend-mode: multiply; }
@@ -315,3 +315,23 @@ body.book-open #btnBack { display: inline-flex; }
 .scan-tools .torch { display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; }
 .grid2 { align-items: end; }
 #rKind button { flex: 1 1 auto; }
+
+.ocr-tools { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.ocr-tools .hint { flex: 1; margin: 0; }
+.ocr-tools .ghost { flex: none; min-height: 44px; }
+
+/* ===== 위로 올려 전체 화면 / 내려서 원래대로 (v1.0.8) ===== */
+.drag-zone { position: sticky; top: 0; z-index: 4; height: 34px; display: flex; align-items: center; justify-content: center; background: var(--paper); touch-action: none; cursor: grab; }
+.sheet .drag-zone { margin: 0 -18px; border-radius: 22px 22px 0 0; }
+#bookPanel .drag-zone { margin: 0 -16px; border-radius: 22px 22px 0 0; }
+.drag-zone .sheet-grab, .drag-zone .bp-grab { width: 44px; height: 5px; margin: 0; border-radius: 3px; background: #d3c6ae; }
+.sheet-x { z-index: 5; }
+.sheet { transition: transform .28s cubic-bezier(.2, .8, .2, 1), height .28s ease, border-radius .28s; }
+.sheet.expanded { height: 100vh; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+.sheet.expanded .drag-zone { border-radius: 0; height: calc(34px + var(--safe-t)); padding-top: var(--safe-t); }
+.sheet.expanded .sheet-x { top: calc(10px + var(--safe-t)); }
+#bookPanel { transition: transform .35s cubic-bezier(.2, .8, .2, 1), top .3s ease, border-radius .3s; }
+#bookPanel.expanded { top: 0; border-radius: 0; }
+#bookPanel.expanded .drag-zone { border-radius: 0; height: calc(34px + var(--safe-t)); padding-top: var(--safe-t); }
+#bookPanel .tabs { top: 34px; }
+#bookPanel.expanded .tabs { top: calc(34px + var(--safe-t)); }

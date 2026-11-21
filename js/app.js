@@ -2,11 +2,11 @@
 import { db, uid } from './db.js';
 import { lookupISBN, searchTitle, cleanISBN, isISBN13, getKakaoKey } from './bookapi.js';
 import { startScan, decodeImageFile } from './scanner.js';
-import { fileToCanvas, recognize, joinWords } from './ocr.js';
+import { fileToCanvas, recognize, recognizeAuto, rotateCanvas, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.7';
+const APP_VERSION = '1.0.8';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -72,7 +72,7 @@ function notice(el, html, kind = 'warn') {
 function openSheet(html, { full = false, onClose, cls = '' } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
-  wrap.innerHTML = `<div class="sheet-bg"></div><div class="sheet ${full ? 'full' : ''} ${cls}"><div class="sheet-grab"></div><button class="sheet-x" aria-label="닫기">✕</button><div class="sheet-body">${html}</div></div>`;
+  wrap.innerHTML = `<div class="sheet-bg"></div><div class="sheet ${full ? 'full' : ''} ${cls}"><div class="drag-zone" title="위로 올리면 전체 화면, 내리면 원래대로"><div class="sheet-grab"></div></div><button class="sheet-x" aria-label="닫기">✕</button><div class="sheet-body">${html}</div></div>`;
   $('#sheetRoot').append(wrap);
   requestAnimationFrame(() => wrap.classList.add('on'));
   const close = () => {
@@ -83,7 +83,60 @@ function openSheet(html, { full = false, onClose, cls = '' } = {}) {
   pushLayer(close);
   wrap.querySelector('.sheet-bg').onclick = back;
   wrap.querySelector('.sheet-x').onclick = back;
+  const sheet = wrap.querySelector('.sheet');
+  bindDrag(wrap.querySelector('.drag-zone'), sheet, {
+    onUp: () => expandSheet(sheet),
+    onDown: (dy) => {
+      if (sheet.classList.contains('expanded')) collapseSheet(sheet);
+      else if (dy > 100) back();
+    },
+  });
   return wrap.querySelector('.sheet-body');
+}
+
+// 위쪽 손잡이를 위로 올리면 onUp, 아래로 내리면 onDown(거리)
+function bindDrag(zone, target, { onUp, onDown }) {
+  let y0 = null;
+  let dy = 0;
+  let pid = null;
+  zone.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    y0 = e.clientY; dy = 0; pid = e.pointerId;
+    try { zone.setPointerCapture(pid); } catch {}
+    target.style.transition = 'none';
+  });
+  zone.addEventListener('pointermove', (e) => {
+    if (y0 == null || e.pointerId !== pid) return;
+    dy = e.clientY - y0;
+    target.style.transform = `translateY(${dy > 0 ? dy : dy / 4}px)`;
+  });
+  const end = (e) => {
+    if (y0 == null || e.pointerId !== pid) return;
+    y0 = null;
+    target.style.transition = '';
+    target.style.transform = '';
+    if (dy < -35) onUp?.();
+    else if (dy > 50) onDown?.(dy);
+  };
+  zone.addEventListener('pointerup', end);
+  zone.addEventListener('pointercancel', end);
+}
+
+function expandSheet(sheet) {
+  if (sheet.classList.contains('expanded')) return;
+  sheet.style.height = sheet.offsetHeight + 'px';
+  void sheet.offsetHeight;
+  sheet.classList.add('expanded');
+  sheet.style.height = '';
+}
+function collapseSheet(sheet) {
+  const full = sheet.offsetHeight;
+  sheet.classList.remove('expanded');
+  const natural = sheet.offsetHeight;
+  sheet.style.height = full + 'px';
+  void sheet.offsetHeight;
+  sheet.style.height = natural + 'px';
+  setTimeout(() => { sheet.style.height = ''; }, 320);
 }
 
 const icon = {
@@ -245,6 +298,7 @@ async function openBook(id, focusQuoteId) {
   state.graphPage = null;
   document.body.classList.add('book-open');
   $('#today').hidden = true;
+  $('#bookPanel').classList.remove('expanded');
   renderPanel();
   $('#bookPanel').hidden = false;
   requestAnimationFrame(() => $('#bookPanel').classList.add('on'));
@@ -259,7 +313,7 @@ function closeBookUI() {
   document.body.classList.remove('book-open');
   const p = $('#bookPanel');
   p.classList.remove('on');
-  setTimeout(() => { p.hidden = true; }, 260);
+  setTimeout(() => { p.hidden = true; p.classList.remove('expanded'); }, 300);
   state.graph?.destroy();
   state.graph = null;
   state.current = null;
@@ -311,7 +365,7 @@ function renderPanel() {
     : `<div class="bp-cover ph" style="background:${bookColor(book.id + book.title)}">${esc([...book.title][0] || '')}</div>`;
   const dots = quotes.map((q) => `<button class="pb-dot" data-q="${q.id}" style="left:${Math.min(100, ((q.page || 0) / pages) * 100)}%" title="p.${q.page}"></button>`).join('');
   $('#bookPanel').innerHTML = `
-    <div class="bp-grab"></div>
+    <div class="drag-zone" id="bpDrag"><div class="bp-grab"></div></div>
     <div class="bp-head">
       ${cover}
       <div class="bp-info">
@@ -337,6 +391,11 @@ function renderPanel() {
       ? `<button class="primary" id="addQuote">＋ 밑줄 긋기</button><button class="ghost" id="importBtn">메모장에서 가져오기</button>`
       : `<button class="primary" id="addPerson">＋ 인물</button><button class="ghost" id="addRel">＋ 관계</button>`}</div>`;
 
+  const panel = $('#bookPanel');
+  bindDrag($('#bpDrag'), panel, {
+    onUp: () => panel.classList.add('expanded'),
+    onDown: () => panel.classList.remove('expanded'),
+  });
   $('#bpStatus').onchange = async (e) => {
     book.status = e.target.value;
     await db.put('books', book);
@@ -661,42 +720,74 @@ async function ocrSheet(file, onUse) {
     <h3>문장 고르기</h3>
     <div class="ocr-status"><div class="bar"><i></i></div><span>사진 준비 중…</span></div>
     <div class="ocr-stage" hidden><div class="ocr-img"></div></div>
-    <p class="hint" hidden id="ocrHint">형광펜처럼 <b>문장 위를 손가락으로 쭉 그으세요</b>. 다시 그으면 새로 골라져요.</p>
+    <div class="ocr-tools" hidden><p class="hint">형광펜처럼 <b>문장 위를 손가락으로 쭉 그으세요</b>. 다시 그으면 새로 골라져요.</p><button class="ghost" id="ocrRotate" type="button">↻ 돌리기</button></div>
     <div class="ocr-pick" hidden><div class="ocr-page"></div><div class="ocr-text"></div></div>
     <div class="btn-row"><button class="ghost" id="ocrAll" disabled>전체 쓰기</button><button class="primary" id="ocrUse" disabled>이 문장 쓰기</button></div>`, { full: true });
   const status = $('.ocr-status span', body);
   const bar = $('.ocr-status i', body);
-  let result;
-  try {
-    const canvas = await fileToCanvas(file);
-    status.textContent = '글자 읽는 중… (처음 한 번은 한글 데이터를 받느라 조금 걸려요)';
-    result = await recognize(canvas, (m) => {
-      if (m.status === 'recognizing text') { bar.style.width = Math.round(m.progress * 100) + '%'; status.textContent = `글자 읽는 중 ${Math.round(m.progress * 100)}%`; }
-      else if (/load|initializ/.test(m.status)) status.textContent = '한글 인식 준비 중…';
-    });
+  const stage = $('.ocr-img', body);
+  let result = null;
+  let canvas = null;
+  let sel = [];
+  let busy = false;
+
+  const progress = (m) => {
+    if (m.status === 'recognizing text') { bar.style.width = Math.round(m.progress * 100) + '%'; status.textContent = `글자 읽는 중 ${Math.round(m.progress * 100)}%`; }
+    else if (/load|initializ/.test(m.status)) status.textContent = '한글 인식 준비 중… (처음 한 번은 조금 걸려요)';
+  };
+  const showLoading = (msg) => {
+    $('.ocr-status', body).hidden = false;
+    $('.ocr-stage', body).hidden = true;
+    $('.ocr-tools', body).hidden = true;
+    $('.ocr-pick', body).hidden = true;
+    $('#ocrAll', body).disabled = true;
+    $('#ocrUse', body).disabled = true;
+    bar.style.width = '3%';
+    status.textContent = msg;
+  };
+  const show = () => {
     const url = canvas.toDataURL('image/jpeg', 0.85);
-    const stage = $('.ocr-img', body);
-    stage.style.aspectRatio = `${result.width} / ${result.height}`;
+    // 세로·가로 사진 모두 화면 안에 비율 그대로 들어가게
+    const maxH = Math.round(innerHeight * 0.56);
+    const maxW = body.clientWidth || innerWidth - 36;
+    const k = Math.min(maxW / result.width, maxH / result.height);
+    stage.style.width = Math.round(result.width * k) + 'px';
+    stage.style.height = Math.round(result.height * k) + 'px';
     stage.innerHTML = `<img src="${url}" alt="">` + result.words.map((w) => {
       const b = w.bbox;
       return `<i class="wbox" data-i="${w.i}" style="left:${(b.x0 / result.width) * 100}%;top:${(b.y0 / result.height) * 100}%;width:${((b.x1 - b.x0) / result.width) * 100}%;height:${((b.y1 - b.y0) / result.height) * 100}%"></i>`;
     }).join('');
     $('.ocr-status', body).hidden = true;
     $('.ocr-stage', body).hidden = false;
-    $('#ocrHint', body).hidden = false;
+    $('.ocr-tools', body).hidden = false;
     $('.ocr-pick', body).hidden = false;
     $('#ocrAll', body).disabled = !result.words.length;
     $('.ocr-page', body).textContent = result.page ? `쪽수 p.${result.page} 로 보여요` : '쪽수는 못 찾았어요';
-    if (!result.words.length) $('.ocr-text', body).textContent = '글자를 찾지 못했어요. 밝은 곳에서 페이지를 평평하게 찍어보세요.';
-  } catch (e) {
-    status.textContent = '글자를 읽지 못했어요: ' + e.message;
-    return;
-  }
+    sel = [];
+    paint();
+    if (!result.words.length) $('.ocr-text', body).textContent = '글자를 찾지 못했어요. 밝은 곳에서 페이지를 평평하게 찍거나 ↻ 돌리기를 눌러보세요.';
+    else if (result.conf < 45) $('.ocr-text', body).innerHTML = '<span class="muted">글자가 이상하게 읽혔다면 ↻ 돌리기로 사진 방향을 맞춰보세요.</span>';
+  };
 
-  const stage = $('.ocr-img', body);
-  const boxes = $$('.wbox', stage);
-  let sel = [];
+  const run = async (c, auto) => {
+    busy = true;
+    try {
+      showLoading('글자 읽는 중…');
+      if (auto) {
+        const best = await recognizeAuto(c, progress, () => { status.textContent = '사진 방향 맞추는 중…'; bar.style.width = '3%'; });
+        canvas = best.canvas; result = best.r;
+      } else {
+        canvas = c; result = await recognize(c, progress);
+      }
+      show();
+    } catch (e) {
+      status.textContent = '글자를 읽지 못했어요: ' + e.message;
+    }
+    busy = false;
+  };
+
   const hitWord = (e) => {
+    if (!result) return null;
     const r = stage.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * result.width;
     const y = ((e.clientY - r.top) / r.height) * result.height;
@@ -710,13 +801,13 @@ async function ocrSheet(file, onUse) {
     }
     return best;
   };
-  const paint = () => {
+  function paint() {
     const set = new Set(sel.map((w) => w.i));
-    boxes.forEach((b) => b.classList.toggle('on', set.has(+b.dataset.i)));
+    $$('.wbox', stage).forEach((b) => b.classList.toggle('on', set.has(+b.dataset.i)));
     const text = joinWords(sel);
     $('.ocr-text', body).innerHTML = text ? `<span class="hl">${esc(text)}</span>` : '<span class="muted">아직 고른 문장이 없어요</span>';
     $('#ocrUse', body).disabled = !text;
-  };
+  }
   let startW = null;
   stage.addEventListener('pointerdown', (e) => {
     const w = hitWord(e);
@@ -737,10 +828,17 @@ async function ocrSheet(file, onUse) {
   const up = () => { startW = null; };
   stage.addEventListener('pointerup', up);
   stage.addEventListener('pointercancel', up);
-  paint();
 
+  $('#ocrRotate', body).onclick = () => { if (!busy && canvas) run(rotateCanvas(canvas, 90), false); };
   $('#ocrUse', body).onclick = async () => { onUse(joinWords(sel), result.page); await closeTop(); };
   $('#ocrAll', body).onclick = async () => { onUse(joinWords(result.words.filter((w) => !/^\d+$/.test(w.text) || w.text !== String(result.page))), result.page); await closeTop(); };
+
+  try {
+    const c = await fileToCanvas(file);
+    await run(c, true);
+  } catch (e) {
+    status.textContent = '사진을 열지 못했어요: ' + e.message;
+  }
 }
 
 /* ================= 책 등록 ================= */
