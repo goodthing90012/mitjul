@@ -197,7 +197,7 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 .scan-box { position: relative; margin: 12px 0; border-radius: 16px; overflow: hidden; background: #000; }
 .scan-box video { width: 100%; display: block; max-height: 46vh; object-fit: cover; }
 .scan-guide { position: absolute; left: 12%; right: 12%; top: 32%; bottom: 32%; border: 3px solid #f2c94c; border-radius: 10px; box-shadow: 0 0 0 999px rgba(0, 0, 0, .35); }
-.scan-box p { position: absolute; bottom: 8px; left: 0; right: 0; margin: 0; text-align: center; color: #fff; font-size: 13px; }
+.scan-box p { position: absolute; top: 8px; padding: 0 10px; left: 0; right: 0; margin: 0; text-align: center; color: #fff; font-size: 13px; }
 .or { text-align: center; color: #9a8f84; font-size: 12px; margin: 14px 0 10px; }
 .inline { display: flex; gap: 8px; margin-bottom: 10px; }
 .inline input { margin: 0; flex: 1; }
@@ -248,3 +248,12 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 @media (min-width: 900px) {
   :root { --panel-top: 44vh; }
 }
+
+.scan-box b { color: #f2c94c; }
+.scan-box.focusing .scan-guide { border-color: #fff; }
+.scan-tools { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 10px; align-items: center; }
+.scan-tools .zoom { flex: 1; display: flex; align-items: center; gap: 8px; color: #fff; font-size: 13px; margin: 0; }
+.scan-tools .zoom input { flex: 1; accent-color: #f2c94c; }
+.scan-tools .torch { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.25); font-size: 18px; margin-left: auto; }
+.scan-tools .torch.on { background: #f2c94c; }
+.sheet .photo-scan { display: flex; margin-top: 10px; }

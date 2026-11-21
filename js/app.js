@@ -1,12 +1,12 @@
 // 밑줄서재 — 앱 본체
 import { db, uid } from './db.js';
 import { lookupISBN, searchTitle, cleanISBN, isISBN13, getKakaoKey } from './bookapi.js';
-import { startScan } from './scanner.js';
+import { startScan, decodeImageFile } from './scanner.js';
 import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -718,7 +718,9 @@ function addBookSheet() {
   const body = openSheet(`
     <h3>책 꽂기</h3>
     <button class="primary big" id="scanBtn">${icon.barcode} 바코드 스캔</button>
-    <div class="scan-box" hidden><video playsinline muted></video><div class="scan-guide"></div><p>책 뒷면 바코드를 네모 안에 맞춰주세요</p></div>
+    <div class="scan-box" hidden><video playsinline muted></video><div class="scan-guide"></div><p>폰을 <b>한 뼘(15~20cm)</b> 떨어뜨려 바코드를 네모에 맞춰주세요 · 흐리면 화면을 톡</p>
+      <div class="scan-tools"><label class="zoom" hidden>줌 <input type="range" id="zoomIn"></label><button type="button" class="torch" hidden>🔦</button></div></div>
+    <label class="ghost wide photo-scan">${icon.camera} 그래도 안 되면 사진으로 찍기<input type="file" accept="image/*" capture="environment" id="scanPhoto" hidden></label>
     <div class="or">또는</div>
     <div class="inline"><input id="isbnIn" inputmode="numeric" placeholder="ISBN 13자리 (978…)"><button class="ghost" id="isbnGo">찾기</button></div>
     <div class="inline"><input id="titleIn" placeholder="제목으로 찾기"><button class="ghost" id="titleGo">검색</button></div>
@@ -750,10 +752,32 @@ function addBookSheet() {
         navigator.vibrate?.(60);
         lookup(code);
       });
+      const ctl = stopScan;
+      const zl = $('.zoom', box);
+      if (ctl.zoom) {
+        const zi = $('#zoomIn', box);
+        Object.assign(zi, { min: ctl.zoom.min, max: ctl.zoom.max, step: ctl.zoom.step, value: ctl.zoom.value });
+        zi.oninput = () => ctl.setZoom(+zi.value);
+        zl.hidden = false;
+      }
+      const tb = $('.torch', box);
+      if (ctl.torch) { tb.hidden = false; tb.onclick = () => tb.classList.toggle('on', ctl.toggleTorch()); }
+      $('video', box).onclick = () => { ctl.focus?.(); box.classList.add('focusing'); setTimeout(() => box.classList.remove('focusing'), 600); };
     } catch (e) {
       box.hidden = true;
       toast(e.name === 'NotAllowedError' ? '카메라 권한이 필요해요' : '카메라를 열 수 없어요');
     }
+  };
+  $('#scanPhoto', body).onchange = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (stopScan) { stopScan(); stopScan = null; $('.scan-box', body).hidden = true; }
+    results.innerHTML = '<div class="loading">사진에서 바코드 찾는 중…</div>';
+    const code = await decodeImageFile(f).catch(() => null);
+    if (code) { navigator.vibrate?.(60); lookup(code); return; }
+    results.innerHTML = '';
+    toast('바코드를 못 찾았어요. 바코드가 크게 나오게 다시 찍어주세요');
   };
   $('#isbnGo', body).onclick = () => {
     const v = cleanISBN($('#isbnIn', body).value);
