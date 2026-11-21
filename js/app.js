@@ -6,7 +6,7 @@ import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, 
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 
-const APP_VERSION = '1.1.2';
+const APP_VERSION = '1.1.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -161,6 +161,9 @@ const icon = {
 };
 
 /* ================= 데이터 ================= */
+// 쪽수 순, 쪽수 없는 밑줄은 맨 아래
+const pageKey = (q) => q.page || Infinity;
+
 async function loadBooks() {
   state.books = (await db.all('books')).sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -171,7 +174,7 @@ async function loadCurrent(bookId) {
   const [quotes, people, relations] = await Promise.all([
     db.byBook('quotes', bookId), db.byBook('people', bookId), db.byBook('relations', bookId),
   ]);
-  quotes.sort((a, b) => (a.page || 0) - (b.page || 0) || a.createdAt - b.createdAt);
+  quotes.sort((a, b) => (pageKey(a) === pageKey(b) ? a.createdAt - b.createdAt : pageKey(a) - pageKey(b)));
   people.sort((a, b) => (a.firstPage || 0) - (b.firstPage || 0) || a.createdAt - b.createdAt);
   state.current = { book, quotes, people, relations };
 }
@@ -1230,7 +1233,7 @@ async function searchSheet() {
     const qs = quotes.filter((x) => books[x.bookId] && (tagOnly
       ? (x.tags || []).some((t) => t.toLowerCase() === tagOnly)
       : (x.text + ' ' + (x.note || '') + ' ' + (x.tags || []).join(' ') + ' ' + books[x.bookId].title).toLowerCase().includes(q)))
-      .sort((a, b) => (a.bookId === b.bookId ? (a.page || 0) - (b.page || 0) : books[a.bookId].title.localeCompare(books[b.bookId].title)));
+      .sort((a, b) => (a.bookId === b.bookId ? (pageKey(a) === pageKey(b) ? a.createdAt - b.createdAt : pageKey(a) - pageKey(b)) : books[a.bookId].title.localeCompare(books[b.bookId].title)));
     const nq = normalizeName(raw);
     const ps = tagOnly || !nq ? [] : people.filter((p) => books[p.bookId] && [p.name, ...(p.aliases || []).map((a) => a.name)].some((n) => normalizeName(n).includes(nq)));
     const mark = (s) => esc(s).replace(new RegExp(esc(raw).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (m) => `<mark>${m}</mark>`);
