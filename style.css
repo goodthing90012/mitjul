@@ -58,7 +58,6 @@ input, select, textarea { font: inherit; color: var(--ink); }
   background: rgba(255, 250, 240, .92); padding: 9px 14px; border-radius: 20px; font-weight: 600; font-size: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .2); display: none;
 }
-body.book-open #btnBack { display: block; }
 body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-open #emptyHint { display: none; }
 
 .hl { background: linear-gradient(transparent 55%, var(--hl) 55%); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
@@ -181,7 +180,8 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 .primary:disabled { opacity: .4; }
 .primary.big { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; font-size: 16px; }
 .ghost { background: var(--paper2); border: 1px solid var(--line); padding: 12px 16px; border-radius: 14px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.sheet label.ghost { color: var(--ink); margin: 0; font-size: 14px; cursor: pointer; }
+.sheet label.ghost { color: var(--ink); margin: 0; cursor: pointer; }
+.sheet label.ghost svg { flex: none; display: block; }
 .ghost:disabled { opacity: .4; }
 .ghost.wide, .link.wide { width: 100%; margin-bottom: 12px; }
 .danger { color: var(--accent); padding: 12px 16px; border-radius: 14px; font-weight: 600; }
@@ -261,3 +261,52 @@ body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-op
 .notice { border-radius: 12px; padding: 12px 14px; font-size: 13.5px; line-height: 1.65; margin: 10px 0; }
 .notice.warn { background: #fbeee3; border: 1px solid #ecc6ad; color: #6a3a22; }
 #toast { white-space: normal; text-align: center; pointer-events: auto; }
+
+/* ===== 버튼·입력 높이와 정렬 통일 (v1.0.6) ===== */
+/* 큰 버튼 52px, 보통 버튼·입력 48px, 작은 칩 36px. 아이콘과 글자는 항상 가운데 */
+.primary, .ghost, .danger, .sheet label.ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 48px; padding: 0 16px; line-height: 1.2; text-align: center;
+  font-size: 15px; font-weight: 700; border: 1px solid transparent; border-radius: 14px;
+}
+.ghost, .sheet label.ghost { border-color: var(--line); }
+.primary.big { min-height: 56px; font-size: 16px; padding: 0 16px; }
+.primary svg, .ghost svg { flex: none; display: block; }
+.btn-row { align-items: stretch; }
+.btn-row > * { min-height: 52px; }
+.btn-row > .danger { flex: none; padding: 0 18px; }
+.ghost.wide, .sheet label.ghost.wide { display: flex; width: 100%; }
+.link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; line-height: 1.2; }
+.link.wide { display: flex; }
+
+/* 입력칸과 옆 버튼 높이 맞추기 */
+.sheet label > input, .sheet label > select, .inline input, .search-in { height: 48px; padding: 0 12px; line-height: 1.2; }
+.inline { align-items: stretch; }
+.inline .ghost { min-height: 48px; flex: none; min-width: 72px; }
+
+/* 탭·칸 선택 */
+.tabs button { display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 44px; padding: 0 10px; line-height: 1.2; }
+.seg button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 14px; line-height: 1.2; }
+#cStatus button { flex: 1; }
+
+/* 인물 다른 이름 줄 */
+.alias-row > * { height: 44px; padding: 0 8px; line-height: 1.2; }
+.al-del { display: flex; align-items: center; justify-content: center; padding: 0; }
+
+/* 동그란 아이콘 버튼, 상단·떠있는 버튼 */
+.sheet-x { display: flex; align-items: center; justify-content: center; line-height: 1; font-size: 16px; }
+#fab { display: inline-flex; align-items: center; justify-content: center; height: 52px; padding: 0 22px; line-height: 1; }
+#btnBack { align-items: center; height: 40px; padding: 0 14px; line-height: 1; }
+body.book-open #btnBack { display: inline-flex; }
+
+/* 칩 */
+.tag { display: inline-flex; align-items: center; gap: 3px; line-height: 1.2; }
+.tag-filter .tag { min-height: 32px; padding: 0 10px; font-size: 13px; }
+.rk, .fam { display: inline-flex; align-items: center; line-height: 1.3; vertical-align: 1px; }
+.rel { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 44px; line-height: 1.3; }
+.rel .rk { margin-right: 2px; }
+
+/* 스캔 도구 */
+.scan-tools .torch { display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; }
+.grid2 { align-items: end; }
+#rKind button { flex: 1 1 auto; }
