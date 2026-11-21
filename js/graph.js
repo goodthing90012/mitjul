@@ -91,6 +91,7 @@ export function createGraph(svg, { onNodeTap } = {}) {
       const p = n.p;
       const g = el('g', { class: 'gnode' }, gNodes);
       const married = marriedVisible(p, page);
+      el('circle', { r: 30, fill: 'transparent' }, g); // 손가락으로 잡기 쉬운 영역
       el('circle', { r: 20, fill: familyColor(p.family), stroke: married ? familyColor(p.marriedFamily) : '#fffaf0', 'stroke-width': married ? 5 : 2 }, g);
       const ini = el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', 'font-size': 14, 'font-weight': 700 }, g);
       ini.textContent = [...(p.name || '?')][0];

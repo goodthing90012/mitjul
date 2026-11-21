@@ -6,7 +6,7 @@ import { fileToCanvas, recognize, joinWords } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor } from './shelf3d.js';
 
-const APP_VERSION = '1.0.6';
+const APP_VERSION = '1.0.7';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -440,7 +440,8 @@ function renderPeople() {
       <input id="nameFind" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off">
       <div id="findOut"></div>
     </div>
-    <div class="graph-box"><svg id="graphSvg"></svg></div>
+    <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
+    <p class="graph-tip">빈 곳을 쓸면 화면이 내려가고, 인물 동그라미를 끌면 자리를 옮겨요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
       <input type="range" id="pageSlider" min="0" max="${maxP}" value="${page}">
@@ -463,6 +464,7 @@ function renderPeople() {
   state.graph?.destroy();
   state.graph = createGraph($('#graphSvg'), { onNodeTap: (p) => personSheet(p) });
   state.graph.setData(people, relations, page);
+  $('#graphExpand').onclick = () => graphSheet(maxP);
 
   const slider = $('#pageSlider');
   slider.oninput = () => {
@@ -481,6 +483,29 @@ function renderPeople() {
   };
   $$('.people .pcard').forEach((c) => (c.onclick = () => personSheet(people.find((p) => p.id === c.dataset.pid))));
   $$('.rel').forEach((b) => (b.onclick = () => relationSheet(relations.find((r) => r.id === b.dataset.rid))));
+}
+
+// 관계도 전체 화면: 화면 스크롤과 겹치지 않게 넓게 보고 정리
+function graphSheet(maxP) {
+  const { people, relations } = state.current;
+  let g = null;
+  const body = openSheet(`
+    <h3>인물 관계도</h3>
+    <div class="graph-box big"><svg id="graphBig"></svg></div>
+    <div class="slider">
+      <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>
+      <input type="range" id="bigSlider" min="0" max="${maxP}" value="${state.graphPage}">
+    </div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
+  requestAnimationFrame(() => {
+    g = createGraph($('#graphBig', body), { onNodeTap: (p) => personSheet(p) });
+    g.setData(people, relations, state.graphPage);
+  });
+  const sl = $('#bigSlider', body);
+  sl.oninput = () => {
+    state.graphPage = +sl.value;
+    $('#bigLabel', body).textContent = `p.${sl.value}`;
+    g?.setData(state.current.people, state.current.relations, +sl.value);
+  };
 }
 
 function aliasRow(a = {}) {
