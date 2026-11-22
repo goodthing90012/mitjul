@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.16.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2446,7 +2446,7 @@ async function searchSheet() {
 }
 
 /* ================= 설정 ================= */
-// 새 버전 알림: 처음 열었을 때의 sw.js 버전과 지금 서버의 버전이 다르면 설정 버튼에 빨간 점
+// 새 버전 자동 적용: 처음 열었을 때의 sw.js 버전과 지금 서버의 버전이 다르면 (창이 없을 때) 자동 새로고침
 let bootSwVer = null;
 let lastUpdCheck = 0;
 const swVer = async () => {
@@ -2462,7 +2462,17 @@ async function checkUpdate(force) {
     if (!bootSwVer) { bootSwVer = v; return; }
     state.hasUpdate = v !== bootSwVer;
     $('#btnSettings').classList.toggle('has-dot', state.hasUpdate);
+    if (state.hasUpdate) reloadWhenIdle();
   } catch {}
+}
+// 열린 창(입력 중일 수 있는 시트)이 없을 때 조용히 새로고침. 창이 열려 있으면 닫힐 때까지 기다림(그동안 설정에 점)
+const sheetsOpen = () => $('#sheetRoot').children.length > 0;
+let idleWatch = null;
+function reloadWhenIdle() {
+  if (!sheetsOpen()) { location.reload(); return; }
+  if (idleWatch) return;
+  idleWatch = new MutationObserver(() => { if (!sheetsOpen()) setTimeout(() => !sheetsOpen() && location.reload(), 400); });
+  idleWatch.observe($('#sheetRoot'), { childList: true });
 }
 
 function settingsSheet() {
@@ -2477,7 +2487,7 @@ function settingsSheet() {
     <div class="btn-row"><button class="ghost" id="bExport">내보내기</button><label class="ghost">불러오기<input type="file" accept="application/json,.json" id="bImport" hidden></label></div>
     <h4 class="sec">앱 업데이트</h4>
     ${state.hasUpdate
-      ? '<p class="hint"><b class="upd-new">● 새 버전이 나왔어요.</b> 눌러서 받아주세요. 기록은 지워지지 않아요.</p><button class="primary wide" id="appReload" style="width:100%">새 버전 받기</button>'
+      ? '<p class="hint"><b class="upd-new">● 새 버전이 나왔어요.</b> 창을 닫으면 자동으로 바뀌어요. 지금 받으려면 눌러주세요. 기록은 지워지지 않아요.</p><button class="primary wide" id="appReload" style="width:100%">새 버전 받기</button>'
       : '<p class="hint">새 버전을 올렸는데 화면이 그대로면 눌러주세요. 기록은 지워지지 않아요.</p><button class="ghost wide" id="appReload">새로고침</button>'}
     <p class="muted center">밑줄서재 v${APP_VERSION}</p>`);
   $('#appReload', body).onclick = async (e) => {
