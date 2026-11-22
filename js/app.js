@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.13.1';
+const APP_VERSION = '1.14.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1806,6 +1806,42 @@ async function underlineSheet(file, onUse, onPage) {
     const r = cv.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * cv.width, y: ((e.clientY - r.top) / r.height) * cv.height };
   };
+  // 돋보기: 손가락에 가린 부분을 손가락 위에 크게 보여줌
+  const loupe = document.createElement('canvas');
+  loupe.className = 'hl-loupe';
+  const LS = 132; const dpr = Math.min(2, devicePixelRatio || 1);
+  loupe.width = LS * dpr; loupe.height = LS * dpr;
+  loupe.hidden = true;
+  document.body.append(loupe);
+  const lctx = loupe.getContext('2d');
+  let lastEv = null;
+  const showLoupe = (e) => {
+    if (e) lastEv = e;
+    if (!lastEv) return;
+    const r = cv.getBoundingClientRect();
+    const k = cv.width / r.width; // 화면 → 그림
+    const p = { x: (lastEv.clientX - r.left) * k, y: (lastEv.clientY - r.top) * k };
+    const zoom = 2; // 화면 대비 2배
+    const half = (LS / 2 / zoom) * k; // 그림에서 보여줄 반경
+    lctx.save();
+    lctx.clearRect(0, 0, loupe.width, loupe.height);
+    lctx.fillStyle = '#fff'; lctx.fillRect(0, 0, loupe.width, loupe.height);
+    lctx.drawImage(cv, p.x - half, p.y - half, half * 2, half * 2, 0, 0, loupe.width, loupe.height);
+    // 가운데 표시 (지금 손가락 위치)
+    lctx.strokeStyle = 'rgba(42,33,27,.55)'; lctx.lineWidth = 1.5 * dpr;
+    const c = loupe.width / 2;
+    lctx.beginPath(); lctx.moveTo(c - 7 * dpr, c); lctx.lineTo(c + 7 * dpr, c); lctx.moveTo(c, c - 7 * dpr); lctx.lineTo(c, c + 7 * dpr); lctx.stroke();
+    lctx.restore();
+    // 손가락 위쪽에, 화면 위가 모자라면 아래쪽에
+    let top = lastEv.clientY - LS - 56;
+    if (top < 8) top = lastEv.clientY + 56;
+    const left = Math.max(8, Math.min(innerWidth - LS - 8, lastEv.clientX - LS / 2));
+    loupe.style.left = left + 'px'; loupe.style.top = top + 'px';
+    loupe.hidden = false;
+  };
+  const hideLoupe = () => { loupe.hidden = true; lastEv = null; };
+  const lmo = new MutationObserver(() => { if (!document.body.contains(cv)) { loupe.remove(); lmo.disconnect(); } }); // 시트 닫히면 정리
+  lmo.observe(document.body, { childList: true, subtree: true });
   const segDist = (st, p) => {
     const dx = st.x1 - st.x0; const dy = st.y1 - st.y0; const L = dx * dx + dy * dy || 1;
     const t = Math.max(0, Math.min(1, ((p.x - st.x0) * dx + (p.y - st.y0) * dy) / L));
@@ -1819,16 +1855,17 @@ async function underlineSheet(file, onUse, onPage) {
     // 1) 고른 밑줄의 양 끝 손잡이
     if (sel) {
       const r = 22 * k;
-      if (Math.hypot(p.x - sel.x0, p.y - sel.y0) < r) { act = { mode: 'a', p, s0: { ...sel } }; return; }
-      if (Math.hypot(p.x - sel.x1, p.y - sel.y1) < r) { act = { mode: 'b', p, s0: { ...sel } }; return; }
+      if (Math.hypot(p.x - sel.x0, p.y - sel.y0) < r) { act = { mode: 'a', p, s0: { ...sel } }; showLoupe(e); return; }
+      if (Math.hypot(p.x - sel.x1, p.y - sel.y1) < r) { act = { mode: 'b', p, s0: { ...sel } }; showLoupe(e); return; }
     }
     // 2) 이미 그은 밑줄 위 → 골라서 옮기기 (위에 있는 것부터)
     const hit = [...strokes].reverse().find((st) => segDist(st, p) < st.w / 2 + 10 * k);
-    if (hit) { sel = hit; act = { mode: 'move', p, s0: { ...hit } }; paintHl(); return; }
+    if (hit) { sel = hit; act = { mode: 'move', p, s0: { ...hit } }; paintHl(); showLoupe(e); return; }
     // 3) 빈 곳 → 새로 긋기
     sel = null;
     cur = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, w: lw() };
     paintHl();
+    showLoupe(e);
   });
   cv.addEventListener('pointermove', (e) => {
     const p = toImg(e);
@@ -1844,6 +1881,7 @@ async function underlineSheet(file, onUse, onPage) {
         Object.assign(sel, A ? { x0: nx, y0: ny } : { x1: nx, y1: ny });
       }
       paintHl();
+      showLoupe(e);
       return;
     }
     if (!cur) return;
@@ -1851,8 +1889,10 @@ async function underlineSheet(file, onUse, onPage) {
     // 거의 수평이면 반듯하게 (책 줄은 수평이니까)
     cur.y1 = Math.abs(p.y - cur.y0) < Math.abs(p.x - cur.x0) * 0.12 ? cur.y0 : p.y;
     paintHl();
+    showLoupe(e);
   });
   const endHl = () => {
+    hideLoupe();
     if (act) { act = null; paintHl(); return; }
     if (!cur) return;
     if (Math.hypot(cur.x1 - cur.x0, cur.y1 - cur.y0) > cur.w * 0.6) { strokes.push(cur); sel = cur; } // 방금 그은 것을 바로 고른 상태로

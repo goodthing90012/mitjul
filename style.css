@@ -525,3 +525,6 @@ textarea.desc-area[hidden] { display: none; }
 .hl-pad button { width: 52px; height: 52px; min-height: 52px; padding: 0; border-radius: 14px; border: 1px solid var(--line, #e3d9c8); background: #fffaf0; font-size: 20px; font-weight: 700; color: #2a211b; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .hl-pad button:active { background: #2a211b; color: #fffaf0; }
 .hl-pad .del { margin-left: 4px; }
+/* 사진 밑줄 돋보기 */
+.hl-loupe { position: fixed; z-index: 9999; width: 132px; height: 132px; border-radius: 50%; border: 3px solid #2a211b; box-shadow: 0 8px 24px rgba(0,0,0,.3); pointer-events: none; background: #fff; }
+.hl-loupe[hidden] { display: none; }
