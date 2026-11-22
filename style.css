@@ -58,7 +58,7 @@ input, select, textarea { font: inherit; color: var(--ink); }
   background: rgba(255, 250, 240, .92); padding: 9px 14px; border-radius: 20px; font-weight: 600; font-size: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .2); display: none;
 }
-body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-open #emptyHint { display: none; }
+body.book-open #topbar, body.book-open #fab, body.book-open #today, body.book-open #todayBtn, body.book-open #emptyHint { display: none; }
 
 .hl { background: linear-gradient(transparent 55%, var(--hl) 55%); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 
@@ -531,3 +531,13 @@ textarea.desc-area[hidden] { display: none; }
 /* 글자를 톡 해도 선택되지 않게 (안드로이드 크롬 '탭하여 검색' 바가 뜨지 않게). 입력칸은 그대로 선택·복사 가능 */
 body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+/* 오늘의 한 줄 ✨ 버튼 (책 꽂기 왼쪽) + 카드 */
+#todayBtn { position: fixed; z-index: 5; right: 156px; bottom: calc(var(--safe-b) + 18px);
+  width: 52px; height: 52px; min-height: 52px; padding: 0; border-radius: 50%; border: 0; background: rgba(255, 250, 240, .96); font-size: 22px; line-height: 1;
+  box-shadow: 0 6px 18px rgba(43, 38, 34, .3); display: inline-flex; align-items: center; justify-content: center; }
+#todayBtn[hidden] { display: none; }
+.today-card { background: #fffaf0; border-radius: 16px; padding: 18px 18px 14px; margin: 4px 0 16px; box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+.today-card .today-label { font-size: 13px; }
+.today-card .today-text { font-size: 17px; line-height: 1.75; margin: 10px 0 8px; -webkit-line-clamp: unset; display: block; overflow: visible; }
+.today-card .today-src { font-size: 13px; }
+.today-card .today-img { max-height: 50vh; object-fit: contain; }

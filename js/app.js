@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.14.2';
+const APP_VERSION = '1.15.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -407,20 +407,32 @@ async function reloadShelf() {
   renderToday(quotes);
 }
 
+// 오늘의 한 줄: 홈엔 ✨ 버튼만, 누르면 카드로
 function renderToday(quotes) {
-  const el = $('#today');
-  if (!quotes.length || state.current) { el.hidden = true; return; }
+  $('#today').hidden = true;
+  const btn = $('#todayBtn');
+  const pool = quotes.filter((x) => !x.draft && state.books.some((b) => b.id === x.bookId));
+  if (!pool.length || state.current) { btn.hidden = true; state.todayQ = null; return; }
   const d = new Date();
   const seed = d.getFullYear() * 1000 + d.getMonth() * 40 + d.getDate();
-  const pool = quotes.filter((x) => !x.draft);
-  if (!pool.length) { el.hidden = true; return; }
   const sorted = [...pool].sort((a, b) => (a.id < b.id ? -1 : 1));
-  const q = sorted[seed % sorted.length];
-  const b = state.books.find((x) => x.id === q.bookId);
-  if (!b) { el.hidden = true; return; }
-  el.innerHTML = `<div class="today-label">오늘의 한 줄</div>${q.text ? `<p class="today-text"><span class="hl">${esc(q.text)}</span></p>` : ''}${q.image && !q.text ? `<img class="today-img" src="${q.image}" alt="">` : ''}<div class="today-src">${esc(b.title)} · p.${q.page || '?'}</div>`;
-  el.hidden = false;
-  el.onclick = () => openBook(b.id, q.id);
+  state.todayQ = sorted[seed % sorted.length];
+  btn.hidden = false;
+  btn.style.right = 16 + ($('#fab').offsetWidth || 128) + 10 + 'px'; // 책 꽂기 바로 왼쪽
+}
+function todaySheet() {
+  const q = state.todayQ;
+  const b = q && state.books.find((x) => x.id === q.bookId);
+  if (!b) return;
+  const body = openSheet(`
+    <div class="today-card">
+      <div class="today-label">✨ 오늘의 한 줄</div>
+      ${q.text ? `<p class="today-text"><span class="hl">${esc(q.text)}</span></p>` : ''}
+      ${q.image && !q.text ? `<img class="today-img" src="${q.image}" alt="">` : ''}
+      <div class="today-src">${esc(b.title)} · p.${q.page || '?'}</div>
+    </div>
+    <button class="primary wide" id="todayGo" type="button" style="width:100%">이 밑줄 보러 가기</button>`);
+  $('#todayGo', body).onclick = async () => { await closeTop(); openBook(b.id, q.id); };
 }
 
 /* 펼친 책 안쪽 페이지 그림 */
@@ -536,6 +548,7 @@ async function openBook(id, focusQuoteId) {
   state.graphPage = null;
   document.body.classList.add('book-open');
   $('#today').hidden = true;
+  $('#todayBtn').hidden = true;
   setPanel(false);
   renderPanel();
   $('#bookPanel').hidden = false;
@@ -2532,6 +2545,7 @@ async function init() {
   $('#btnShelf').innerHTML = icon.shelf;
   $('#btnShelf').onclick = shelfOrderSheet;
   $('#fab').onclick = addBookSheet;
+  $('#todayBtn').onclick = todaySheet;
   $('#btnBack').onclick = back;
 
   try {
