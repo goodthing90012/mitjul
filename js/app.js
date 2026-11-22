@@ -5,8 +5,9 @@ import { startScan, decodeImageFile } from './scanner.js';
 import { fileToCanvas, recognizeAuto, rotateCanvas, cropCanvas, findPageNumber, fitForOcr, joinWords, WORD_END } from './ocr.js';
 import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marriedVisible } from './graph.js';
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
+import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -544,20 +545,25 @@ function renderPeople() {
   const pages = bookPages(book, quotes);
   const maxP = Math.max(pages, ...people.map((p) => p.firstPage || 0), ...relations.map((r) => r.page || 0));
   if (state.graphPage == null) state.graphPage = maxP;
+  state.graphMax = maxP;
   const page = Math.min(state.graphPage, maxP);
   const body = $('#tabBody');
+  const tools = `<div class="people-tools"><button class="chip" id="ptText" type="button">✍ 문장으로 적기</button><button class="chip" id="ptJson" type="button">📥 JSON 가져오기</button></div>`;
+  const bindTools = () => { $('#ptText').onclick = () => textPeopleSheet(); $('#ptJson').onclick = () => jsonPeopleSheet(); };
   if (!people.length) {
-    body.innerHTML = `<div class="empty">외국 소설처럼 이름·애칭·호칭·결혼 후 성이 헷갈릴 때<br><b>＋ 인물</b>로 한 사람의 여러 이름을 묶어두세요.<br><small>이름마다 처음 나온 쪽을 적어두면 스포일러 없이 볼 수 있어요.</small></div>`;
+    body.innerHTML = `${tools}<div class="empty">외국 소설처럼 이름·애칭·호칭·결혼 후 성이 헷갈릴 때<br><b>＋ 인물</b>로 한 사람의 여러 이름을 묶어두세요.<br><small>"엘리자베스와 제인은 자매"처럼 <b>문장으로 적기</b>가 제일 빨라요.</small></div>`;
+    bindTools();
     return;
   }
   const fams = [...new Set(people.flatMap((p) => [p.family, p.marriedFamily]).filter(Boolean))];
   body.innerHTML = `
+    ${tools}
     <div class="finder">
       <input id="nameFind" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off">
       <div id="findOut"></div>
     </div>
     <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
-    <p class="graph-tip">빈 곳을 쓸면 화면이 내려가고, 인물 동그라미를 끌면 자리를 옮겨요</p>
+    <p class="graph-tip">인물을 <b>길게 눌러 다른 인물로 끌면</b> 이어져요 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 짧게 끌면 자리 옮기기</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
       <input type="range" id="pageSlider" min="0" max="${maxP}" value="${page}">
@@ -578,7 +584,8 @@ function renderPeople() {
     }).join('') || '<div class="empty small">아직 관계가 없어요</div>'}</div>`;
 
   state.graph?.destroy();
-  state.graph = createGraph($('#graphSvg'), { onNodeTap: (p) => personSheet(p) });
+  bindTools();
+  state.graph = createGraph($('#graphSvg'), graphHandlers());
   state.graph.setData(people, relations, page);
   $('#graphExpand').onclick = () => graphSheet(maxP);
 
@@ -613,7 +620,7 @@ function graphSheet(maxP) {
       <input type="range" id="bigSlider" min="0" max="${maxP}" value="${state.graphPage}">
     </div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
   requestAnimationFrame(() => {
-    g = createGraph($('#graphBig', body), { onNodeTap: (p) => personSheet(p) });
+    g = createGraph($('#graphBig', body), graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage)));
     g.setData(people, relations, state.graphPage);
   });
   const sl = $('#bigSlider', body);
@@ -621,6 +628,267 @@ function graphSheet(maxP) {
     state.graphPage = +sl.value;
     $('#bigLabel', body).textContent = `p.${sl.value}`;
     g?.setData(state.current.people, state.current.relations, +sl.value);
+  };
+}
+
+/* ---------- 관계도에서 바로 잇기 / 추가 ---------- */
+// 지금 보고 있는 쪽(슬라이더가 끝이 아니면 그 쪽)을 새 정보가 드러난 쪽으로 씀
+function currentReadPage() {
+  return state.graphPage != null && state.graphMax && state.graphPage < state.graphMax ? state.graphPage : 0;
+}
+function graphHandlers(after) {
+  return {
+    onNodeTap: (p) => personSheet(p),
+    onLink: (a, b) => quickRelSheet(a, b, after),
+    onEmptyDoubleTap: () => quickPersonSheet(after),
+  };
+}
+function quickRelSheet(a, b, after) {
+  const body = openSheet(`
+    <h3>${esc(a.name)} — ${esc(b.name)}</h3>
+    <div class="grid2">
+      <label>관계 이름 <small>선택</small><input id="qrLabel" placeholder="예: 자매, 약혼"></label>
+      <label>드러난 쪽<input id="qrPage" type="number" inputmode="numeric" value="${currentReadPage() || ''}"></label>
+    </div>
+    <div class="field-title">종류를 누르면 바로 이어져요</div>
+    <div class="kind-grid">${Object.entries(REL_KINDS).map(([k, v]) => `<button type="button" data-k="${k}" style="--rc:${v.color}">${v.label}</button>`).join('')}</div>`);
+  const label = $('#qrLabel', body);
+  label.oninput = () => {
+    const g = label.value.trim() ? guessKind(label.value) : null;
+    $$('.kind-grid button', body).forEach((x) => x.classList.toggle('suggest', x.dataset.k === g));
+  };
+  $$('.kind-grid button', body).forEach((btn) => (btn.onclick = async () => {
+    await db.put('relations', { id: uid(), bookId: state.current.book.id, from: a.id, to: b.id, kind: btn.dataset.k, label: label.value.trim(), page: +$('#qrPage', body).value || 0, createdAt: Date.now() });
+    await afterChange();
+    await closeTop();
+    after?.();
+    toast(`${a.name} — ${b.name} 이었어요`);
+  }));
+}
+function quickPersonSheet(after) {
+  const body = openSheet(`
+    <h3>인물 추가</h3>
+    <div class="grid2">
+      <label>이름<input id="qpName" placeholder="예: 샬럿" enterkeyhint="done"></label>
+      <label>처음 나온 쪽<input id="qpPage" type="number" inputmode="numeric" value="${currentReadPage() || ''}"></label>
+    </div>
+    <div class="btn-row"><button class="primary" id="qpSave">추가</button></div>`);
+  setTimeout(() => $('#qpName', body).focus(), 300);
+  const save = async () => {
+    const name = $('#qpName', body).value.trim();
+    if (!name) { toast('이름을 적어주세요'); return; }
+    await db.put('people', { id: uid(), bookId: state.current.book.id, name, aliases: [], firstPage: +$('#qpPage', body).value || 0, createdAt: Date.now() });
+    await afterChange();
+    await closeTop();
+    after?.();
+  };
+  $('#qpSave', body).onclick = save;
+  $('#qpName', body).onkeydown = (e) => { if (e.key === 'Enter') save(); };
+}
+
+/* ---------- 문장·JSON으로 한꺼번에 ---------- */
+// 이름으로 인물 찾기: 정확히 같은 이름·다른 이름 우선, 없으면 '엘리자베스' ↔ '엘리자베스 베넷'처럼
+// 이름 한 단어만 쓴 경우를 딱 한 명일 때만 같은 사람으로 봄 ('베넷 씨'와 '베넷 부인'은 다른 사람)
+function findPersonIn(list, name) {
+  const norm = (x) => String(x || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const n = norm(name);
+  if (!n) return null;
+  const names = (p) => [p.name, ...(p.aliases || []).map((x) => x.name)].map(norm);
+  const exact = list.find((p) => names(p).includes(n));
+  if (exact) return exact;
+  const one = (arr) => (arr.length === 1 ? arr[0] : null);
+  if (!n.includes(' ')) return one(list.filter((p) => names(p).some((x) => x.includes(' ') && x.split(' ')[0] === n)));
+  const first = n.split(' ')[0];
+  return one(list.filter((p) => names(p).some((x) => !x.includes(' ') && x === first)));
+}
+
+// 계획(plan)을 실제 데이터로: 없는 인물은 만들고, 이름·가문·관계를 붙임. dry=true면 미리보기만
+async function applyPeoplePlan(plan, { dry = false } = {}) {
+  const bookId = state.current.book.id;
+  const people = (await db.byBook('people', bookId)).map((p) => ({ ...p, aliases: [...(p.aliases || [])] }));
+  const rels = await db.byBook('relations', bookId);
+  const created = new Set();
+  const touched = new Set();
+  let t = Date.now();
+  const get = (name, page = 0) => {
+    let p = findPersonIn(people, name);
+    if (!p) {
+      p = { id: uid(), bookId, name: name.trim(), aliases: [], firstPage: page, createdAt: t++ };
+      people.push(p);
+      created.add(p.id);
+    }
+    return p;
+  };
+  const newRels = [];
+  const out = [];
+  for (const it of plan) {
+    if (it.type === 'rel') {
+      const a = get(it.a, it.page); const b = get(it.b, it.page);
+      if (a === b) { out.push({ ok: false, text: it.raw, why: '같은 사람이에요' }); continue; }
+      const kind = it.kind || guessKind(it.label);
+      const dup = [...rels, ...newRels].some((r) => ((r.from === a.id && r.to === b.id) || (r.from === b.id && r.to === a.id)) && r.kind === kind && (r.label || '') === (it.label || '') && (r.page || 0) === (it.page || 0));
+      if (!dup) newRels.push({ id: uid(), bookId, from: a.id, to: b.id, kind, label: it.label || '', page: it.page || 0, createdAt: t++ });
+      out.push({ ok: true, text: `${a.name} — ${b.name}`, sub: `${REL_KINDS[kind].label}${it.label ? ' · ' + it.label : ''}${it.page ? ' · p.' + it.page : ''}${dup ? ' (이미 있음)' : ''}`, kind });
+    } else if (it.type === 'alias') {
+      const p = get(it.name, it.page);
+      if (!p.aliases.some((x) => normalizeName(x.name) === normalizeName(it.alias)) && normalizeName(p.name) !== normalizeName(it.alias)) {
+        p.aliases.push({ kind: ALIAS_WORDS.includes(it.kind) ? it.kind.replace('결혼후', '결혼 후') : '별명', name: it.alias, page: it.page || 0 });
+        touched.add(p.id);
+      }
+      out.push({ ok: true, text: `${p.name} = ${it.alias}`, sub: `${it.kind}${it.page ? ' · p.' + it.page : ''}` });
+    } else if (it.type === 'family') {
+      for (const n of it.names) { const p = get(n, it.page); if (!p.family) { p.family = it.family; touched.add(p.id); } }
+      out.push({ ok: true, text: `${it.names.join(', ')}`, sub: `가문: ${it.family}` });
+    } else if (it.type === 'person') {
+      const p = get(it.name, it.firstPage || 0);
+      for (const k of ['family', 'marriedFamily', 'desc']) if (it[k] && !p[k]) { p[k] = it[k]; touched.add(p.id); }
+      if (it.marriedPage && !p.marriedPage) p.marriedPage = it.marriedPage;
+      if (it.firstPage && !p.firstPage) { p.firstPage = it.firstPage; touched.add(p.id); }
+      for (const al of it.aliases || []) {
+        if (al?.name && !p.aliases.some((x) => normalizeName(x.name) === normalizeName(al.name))) { p.aliases.push({ kind: al.kind || '별명', name: al.name, page: al.page || 0 }); touched.add(p.id); }
+      }
+      out.push({ ok: true, text: p.name, sub: '인물' });
+    } else {
+      out.push({ ok: false, text: it.raw, why: '못 알아들었어요' });
+    }
+  }
+  if (!dry) {
+    for (const p of people) if (created.has(p.id) || touched.has(p.id)) await db.put('people', p);
+    for (const r of newRels) await db.put('relations', r);
+  }
+  const newNames = people.filter((p) => created.has(p.id)).map((p) => p.name);
+  return { out, newNames, relCount: newRels.length };
+}
+
+function textPeopleSheet() {
+  let rec = null;
+  const body = openSheet(`
+    <h3>✍ 문장으로 적기</h3>
+    <p class="hint">한 줄에 하나씩 적으면 인물을 만들고 이어줘요. 쪽수(p.120, 120쪽)를 붙이면 그 쪽에서 드러난 걸로 해요.</p>
+    <div class="examples">
+      <code>엘리자베스와 제인은 자매</code><code>다아시의 친구는 빙리</code><code>베넷 부인은 엘리자베스의 어머니</code>
+      <code>리지는 엘리자베스의 애칭</code><code>엘리자베스, 제인, 리디아는 베넷가</code><code>위컴과 다아시는 원수 p.120</code>
+    </div>
+    <div class="field-row"><span class="field-title">적기</span><button class="mini" id="ptMic" type="button">🎤 말하기</button></div>
+    <textarea id="ptIn" rows="6" placeholder="엘리자베스와 제인은 자매&#10;다아시의 친구는 빙리"></textarea>
+    <div id="ptPrev" class="pt-prev"></div>
+    <div class="btn-row"><button class="primary" id="ptApply" disabled>이대로 넣기</button></div>`, { full: true, onClose: () => { try { rec?.stop(); } catch {} } });
+  const ta = $('#ptIn', body);
+  const preview = async () => {
+    const plan = parseText(ta.value);
+    if (!plan.length) { $('#ptPrev', body).innerHTML = ''; $('#ptApply', body).disabled = true; return; }
+    const { out, newNames } = await applyPeoplePlan(plan, { dry: true });
+    $('#ptPrev', body).innerHTML = out.map((o) => o.ok
+      ? `<div class="pp ok"><b>${esc(o.text)}</b><small>${esc(o.sub)}</small></div>`
+      : `<div class="pp bad"><b>${esc(o.text)}</b><small>${esc(o.why)} · "A와 B는 관계" 모양으로 적어보세요</small></div>`).join('') +
+      (newNames.length ? `<div class="pp new">새 인물: ${newNames.map(esc).join(', ')}</div>` : '');
+    $('#ptApply', body).disabled = !out.some((o) => o.ok);
+  };
+  let tmr = 0;
+  ta.oninput = () => { clearTimeout(tmr); tmr = setTimeout(preview, 200); };
+  setTimeout(() => ta.focus(), 300);
+  $('#ptMic', body).onclick = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const mic = $('#ptMic', body);
+    if (!SR) { ta.focus(); toast('키보드의 🎤 버튼을 눌러 말해보세요'); return; }
+    if (rec) { rec.stop(); return; }
+    const base = ta.value.trim();
+    rec = new SR(); rec.lang = 'ko-KR'; rec.interimResults = true; rec.continuous = true;
+    rec.onresult = (ev) => {
+      // 문장이 끝날 때마다 줄을 바꿔서 한 줄 = 관계 하나가 되게
+      const said = [...ev.results].map((r) => r[0].transcript.trim()).filter(Boolean).join('\n');
+      ta.value = (base ? base + '\n' : '') + said;
+      ta.oninput();
+    };
+    rec.onend = () => { rec = null; mic.classList.remove('rec'); mic.textContent = '🎤 말하기'; };
+    rec.onerror = (ev) => toast(ev.error === 'not-allowed' ? '마이크 권한을 허용해 주세요' : '음성 입력이 끊겼어요');
+    try { rec.start(); mic.classList.add('rec'); mic.textContent = '■ 멈추기'; } catch { rec = null; }
+  };
+  $('#ptApply', body).onclick = async () => {
+    try { rec?.stop(); } catch {}
+    const { newNames, relCount } = await applyPeoplePlan(parseText(ta.value));
+    await afterChange();
+    await closeTop();
+    toast(`새 인물 ${newNames.length}명, 관계 ${relCount}개를 넣었어요`);
+  };
+}
+
+// JSON 가져오기 (AI에게 받아온 등장인물 정리 등)
+const JSON_EXAMPLE = {
+  people: [
+    { name: '엘리자베스 베넷', family: '베넷가', firstPage: 5, aliases: [{ kind: '애칭', name: '리지', page: 20 }], marriedFamily: '다아시가', marriedPage: 470, desc: '베넷가 둘째 딸' },
+    { name: '제인 베넷', family: '베넷가', firstPage: 5, aliases: [] },
+  ],
+  relations: [
+    { a: '엘리자베스 베넷', b: '제인 베넷', kind: '가족', label: '자매', page: 5 },
+  ],
+};
+const KIND_KO = { 가족: 'family', 연인: 'love', 부부: 'love', '연인·부부': 'love', 친구: 'friend', 동료: 'friend', '친구·동료': 'friend', 적대: 'enemy', 갈등: 'enemy', '적대·갈등': 'enemy', 기타: 'etc' };
+function jsonToPlan(data) {
+  const plan = [];
+  const ppl = Array.isArray(data) ? data : data.people || data.characters || [];
+  for (const p of ppl) {
+    if (!p?.name) continue;
+    plan.push({ type: 'person', name: String(p.name), family: p.family || '', marriedFamily: p.marriedFamily || '', marriedPage: +p.marriedPage || 0, firstPage: +p.firstPage || 0, desc: p.desc || p.description || '', aliases: (p.aliases || []).map((a) => (typeof a === 'string' ? { name: a, kind: '별명' } : a)) });
+  }
+  for (const r of data.relations || data.relationships || []) {
+    const a = r.a || r.from; const b = r.b || r.to;
+    if (!a || !b) continue;
+    const kind = REL_KINDS[r.kind] ? r.kind : KIND_KO[r.kind] || guessKind(r.label || r.kind || '');
+    plan.push({ type: 'rel', a: String(a), b: String(b), kind, label: r.label || '', page: +r.page || 0, raw: `${a} — ${b}` });
+  }
+  return plan;
+}
+function jsonPeopleSheet() {
+  const { book } = state.current;
+  const upto = currentReadPage();
+  const prompt = `'${book.title}'${book.authors?.length ? `(${book.authors.join(', ')})` : ''}의 등장인물과 관계를 아래 JSON 형식으로만 답해줘. 설명 문장 없이 JSON만.
+${upto ? `나는 p.${upto}까지 읽었으니, 그 뒤에 드러나는 정보(결혼, 정체, 죽음, 배신 등)는 절대 넣지 마.
+` : ''}- 이름은 한국어 번역본 표기로
+- 애칭·호칭·결혼 후 이름·별명은 aliases에 (kind: 애칭/호칭/결혼 후 이름/별명)
+- kind는 가족/연인/친구/적대/기타 중 하나, label에는 자매·약혼 같은 구체적인 관계
+- 쪽수(firstPage, page)를 모르면 0
+
+${JSON.stringify(JSON_EXAMPLE, null, 2)}`;
+  const body = openSheet(`
+    <h3>📥 JSON 가져오기</h3>
+    <p class="hint">ChatGPT·Claude 같은 AI에게 등장인물 정리를 부탁하고, 받은 JSON을 붙여넣거나 파일로 올리세요. 이미 있는 인물은 이름으로 찾아 합쳐요.</p>
+    <button class="ghost wide" id="pjPrompt" type="button">📋 AI에게 보낼 요청문 복사${upto ? ` (p.${upto}까지만)` : ''}</button>
+    <p class="hint small">⚠ AI는 결말까지 알고 있어서 스포일러가 섞일 수 있고, 번역본마다 이름 표기가 다를 수 있어요. 넣기 전에 아래 미리보기를 확인하세요.</p>
+    <textarea id="pjIn" rows="7" placeholder='{"people": [...], "relations": [...]}'></textarea>
+    <label class="ghost wide">파일에서 불러오기<input type="file" accept=".json,application/json,text/plain" id="pjFile" hidden></label>
+    <div id="pjPrev" class="pt-prev"></div>
+    <div class="btn-row"><button class="primary" id="pjApply" disabled>이대로 넣기</button></div>`, { full: true });
+  const ta = $('#pjIn', body);
+  let plan = [];
+  const parse = async () => {
+    const raw = ta.value.trim();
+    plan = [];
+    if (!raw) { $('#pjPrev', body).innerHTML = ''; $('#pjApply', body).disabled = true; return; }
+    try {
+      const jsonText = raw.slice(raw.search(/[[{]/), Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']')) + 1); // 앞뒤 설명·코드블록 표시 무시
+      plan = jsonToPlan(JSON.parse(jsonText));
+    } catch {
+      $('#pjPrev', body).innerHTML = '<div class="pp bad"><b>JSON 모양이 아니에요</b><small>중괄호 { } 로 시작하는 부분 전체를 붙여넣어 주세요</small></div>';
+      $('#pjApply', body).disabled = true;
+      return;
+    }
+    const { out, newNames, relCount } = await applyPeoplePlan(plan, { dry: true });
+    $('#pjPrev', body).innerHTML = `<div class="pp new">인물 ${plan.filter((x) => x.type === 'person').length}명 (새로 ${newNames.length}명) · 새 관계 ${relCount}개</div>` +
+      out.filter((o) => o.sub !== '인물').slice(0, 40).map((o) => `<div class="pp ok"><b>${esc(o.text)}</b><small>${esc(o.sub || '')}</small></div>`).join('');
+    $('#pjApply', body).disabled = !plan.length;
+  };
+  ta.oninput = () => parse();
+  $('#pjFile', body).onchange = async (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) { ta.value = await f.text(); parse(); } };
+  $('#pjPrompt', body).onclick = async () => {
+    try { await navigator.clipboard.writeText(prompt); toast('요청문을 복사했어요. AI에게 붙여넣으세요'); }
+    catch { ta.value = prompt; toast('복사가 안 돼서 아래 칸에 넣어뒀어요. 직접 복사해 주세요'); }
+  };
+  $('#pjApply', body).onclick = async () => {
+    const { newNames, relCount } = await applyPeoplePlan(plan);
+    await afterChange();
+    await closeTop();
+    toast(`새 인물 ${newNames.length}명, 관계 ${relCount}개를 넣었어요`);
   };
 }
 
@@ -1654,7 +1922,7 @@ function settingsSheet() {
     try {
       // 브라우저 HTTP 캐시까지 새로 받기
       const files = ['./', './index.html', './style.css', './sw.js', './manifest.webmanifest',
-        ...['app', 'db', 'bookapi', 'scanner', 'ocr', 'graph', 'shelf3d'].map((n) => `./js/${n}.js`)];
+        ...['app', 'db', 'bookapi', 'scanner', 'ocr', 'graph', 'shelf3d', 'peopletext'].map((n) => `./js/${n}.js`)];
       await Promise.all(files.map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
       const reg = await navigator.serviceWorker?.getRegistration();
       await reg?.update();

@@ -37,7 +37,7 @@ const el = (tag, attrs = {}, parent) => {
   return e;
 };
 
-export function createGraph(svg, { onNodeTap } = {}) {
+export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
@@ -45,6 +45,21 @@ export function createGraph(svg, { onNodeTap } = {}) {
   const gEdges = el('g', {}, svg);
   const gNodes = el('g', {}, svg);
   const gLabels = el('g', {}, svg);
+  const gTemp = el('g', { 'pointer-events': 'none' }, svg);
+  const tempLine = el('line', { stroke: '#c8553d', 'stroke-width': 3, 'stroke-dasharray': '6 5', 'stroke-linecap': 'round', visibility: 'hidden' }, gTemp);
+  const tempRing = el('circle', { r: 27, fill: 'none', stroke: '#c8553d', 'stroke-width': 3, visibility: 'hidden' }, gTemp);
+
+  // 빈 곳 두 번 톡 → 인물 추가
+  let lastTap = null;
+  svg.addEventListener('pointerup', (e) => {
+    if (e.target.closest && e.target.closest('.gnode')) return;
+    const now = performance.now();
+    const pt = toLocal(e);
+    if (lastTap && now - lastTap.t < 350 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
+      lastTap = null;
+      onEmptyDoubleTap?.();
+    } else lastTap = { t: now, ...pt };
+  });
   const size = () => ({ w: svg.clientWidth || 360, h: svg.clientHeight || 340 });
 
   function setData(people, relations, page) {
@@ -108,35 +123,80 @@ export function createGraph(svg, { onNodeTap } = {}) {
     draw();
   }
 
+  // 짧게 끌면 자리 옮기기, 길게 누른 뒤 끌면 다른 인물과 잇기
+  function nodeAt(pt, except) {
+    let best = null; let bd = 34;
+    for (const m of nodes.values()) {
+      if (m === except) continue;
+      const d = Math.hypot(m.x - pt.x, m.y - pt.y);
+      if (d < bd) { bd = d; best = m; }
+    }
+    return best;
+  }
   function bindDrag(n) {
     let start = null;
     let moved = 0;
+    let timer = 0;
+    let linking = false;
+    let target = null;
+    const showTemp = (pt) => {
+      tempLine.setAttribute('x1', n.x); tempLine.setAttribute('y1', n.y);
+      tempLine.setAttribute('x2', pt.x); tempLine.setAttribute('y2', pt.y);
+      tempLine.setAttribute('visibility', 'visible');
+      target = nodeAt(pt, n);
+      if (target) { tempRing.setAttribute('cx', target.x); tempRing.setAttribute('cy', target.y); tempRing.setAttribute('visibility', 'visible'); }
+      else tempRing.setAttribute('visibility', 'hidden');
+    };
+    const hideTemp = () => { tempLine.setAttribute('visibility', 'hidden'); tempRing.setAttribute('visibility', 'hidden'); };
     n._g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       n._g.setPointerCapture(e.pointerId);
       const pt = toLocal(e);
-      start = { dx: n.x - pt.x, dy: n.y - pt.y };
+      start = { dx: n.x - pt.x, dy: n.y - pt.y, x: pt.x, y: pt.y };
       moved = 0;
+      linking = false;
+      target = null;
       n.fixed = true;
+      clearTimeout(timer);
+      if (onLink) {
+        timer = setTimeout(() => {
+          if (!start || moved > 6) return;
+          linking = true;
+          navigator.vibrate?.(25);
+          n._g.classList.add('linking');
+          showTemp({ x: start.x, y: start.y });
+        }, 380);
+      }
     });
     n._g.addEventListener('pointermove', (e) => {
       if (!start) return;
       const pt = toLocal(e);
+      if (linking) { showTemp(pt); return; }
       const nx = pt.x + start.dx;
       const ny = pt.y + start.dy;
       moved += Math.abs(nx - n.x) + Math.abs(ny - n.y);
+      if (moved < 6) return; // 손떨림은 무시 (길게 누르기 판단용)
+      clearTimeout(timer);
       n.x = nx; n.y = ny;
       alpha = Math.max(alpha, 0.3);
       kick();
     });
     const up = () => {
       if (!start) return;
+      clearTimeout(timer);
       start = null;
       n.fixed = false;
-      if (moved < 5) onNodeTap?.(n.p);
+      n._g.classList.remove('linking');
+      if (linking) {
+        hideTemp();
+        linking = false;
+        if (target) onLink?.(n.p, target.p);
+        return;
+      }
+      if (moved < 6) onNodeTap?.(n.p);
     };
     n._g.addEventListener('pointerup', up);
-    n._g.addEventListener('pointercancel', up);
+    n._g.addEventListener('pointercancel', () => { clearTimeout(timer); start = null; n.fixed = false; linking = false; hideTemp(); n._g.classList.remove('linking'); });
   }
 
   function toLocal(e) {
