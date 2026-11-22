@@ -62,8 +62,11 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   const tempRing = el('circle', { r: 27, fill: 'none', stroke: '#c8553d', 'stroke-width': 3, visibility: 'hidden' }, gTemp);
   const size = () => ({ w: svg.clientWidth || 360, h: svg.clientHeight || 300 });
   const applyView = () => gView.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
+  // 확대·이동 중엔 svg 자체를 CSS로 움직이므로, 위치 계산은 움직이기 전 크기(r0)로
+  let gest = null;
+  const svgRect = () => (gest ? gest.r0 : svg.getBoundingClientRect());
   const toLocal = (e) => {
-    const r = svg.getBoundingClientRect();
+    const r = svgRect();
     return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
   };
 
@@ -248,22 +251,57 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     n._g.addEventListener('pointercancel', () => { clearTimeout(timer); start = null; n.fixed = false; linking = false; hideTemp(); n._g.classList.remove('linking'); });
   }
 
-  /* ---- 빈 곳: 톡 = 강조 풀기, 두 번 톡 = 인물 추가, (zoomable) 끌기 = 이동, 두 손가락 = 확대 ---- */
+  /* ---- 빈 곳: 톡 = 강조 풀기, 두 번 톡 = 인물 추가, (zoomable) 끌기 = 이동, 두 손가락 = 확대 ----
+     부드럽게: 움직이는 동안엔 svg 요소를 CSS transform으로만 옮기고(GPU), 손을 떼면 한 번에 반영.
+     놓을 때 속도가 있으면 미끄러지듯 멈추고(관성), 휠 확대는 목표 배율로 천천히 따라감 */
+  let frame = 0;
+  let inertia = 0;
+  let wheelAnim = 0;
+  const beginGesture = () => {
+    if (gest) return;
+    gest = { v0: { ...view }, r0: svg.getBoundingClientRect() };
+    svg.style.transformOrigin = '0 0';
+    svg.style.willChange = 'transform';
+  };
+  const renderGesture = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!gest) return;
+      const s0 = view.k / gest.v0.k;
+      svg.style.transform = `translate3d(${view.x - s0 * gest.v0.x}px, ${view.y - s0 * gest.v0.y}px, 0) scale(${s0})`;
+    });
+  };
+  const commitGesture = () => {
+    if (!gest) return;
+    cancelAnimationFrame(frame); frame = 0;
+    applyView();
+    svg.style.transform = '';
+    svg.style.willChange = '';
+    gest = null;
+  };
+  const stopInertia = () => { cancelAnimationFrame(inertia); inertia = 0; };
+  const clampK = (k) => Math.max(0.35, Math.min(3, k));
+
   const pts = new Map();
   let pan = null;
   let pinch = null;
   let lastTap = null;
   let bgMoved = 0;
+  let vel = { x: 0, y: 0, t: 0 };
   svg.addEventListener('pointerdown', (e) => {
     if (e.target.closest?.('.gnode')) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     bgMoved = 0;
     if (!zoomable) return;
+    stopInertia();
+    cancelAnimationFrame(wheelAnim); wheelAnim = 0;
+    beginGesture();
     svg.setPointerCapture(e.pointerId);
-    if (pts.size === 1) pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    if (pts.size === 1) { pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; vel = { x: 0, y: 0, t: performance.now() }; }
     if (pts.size === 2) {
       const [a, b] = [...pts.values()];
-      const r = svg.getBoundingClientRect();
+      const r = gest.r0;
       const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
       pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: view.k, wx: (mx - view.x) / view.k, wy: (my - view.y) / view.k };
       pan = null;
@@ -274,24 +312,55 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     const prev = pts.get(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     bgMoved += Math.abs(e.clientX - prev.x) + Math.abs(e.clientY - prev.y);
-    if (!zoomable) return;
+    if (!zoomable || !gest) return;
     if (pinch && pts.size >= 2) {
       const [a, b] = [...pts.values()];
-      const r = svg.getBoundingClientRect();
+      const r = gest.r0;
       const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
-      view.k = Math.max(0.35, Math.min(3, pinch.k * (Math.hypot(a.x - b.x, a.y - b.y) / Math.max(pinch.d, 1))));
+      view.k = clampK(pinch.k * (Math.hypot(a.x - b.x, a.y - b.y) / Math.max(pinch.d, 1)));
       view.x = mx - pinch.wx * view.k; view.y = my - pinch.wy * view.k;
-      applyView();
     } else if (pan) {
+      const now = performance.now();
+      const dt = Math.max(1, now - vel.t);
+      // 놓을 때 관성용 속도 (부드럽게 평균)
+      vel.x = 0.75 * ((e.clientX - prev.x) / dt) + 0.25 * vel.x;
+      vel.y = 0.75 * ((e.clientY - prev.y) / dt) + 0.25 * vel.y;
+      vel.t = now;
       view.x = pan.vx + (e.clientX - pan.x); view.y = pan.vy + (e.clientY - pan.y);
-      applyView();
     }
+    renderGesture();
   });
   const bgUp = (e) => {
     if (!pts.has(e.pointerId)) return;
     pts.delete(e.pointerId);
-    if (pts.size < 2) pinch = null;
-    if (pts.size === 0) pan = null;
+    if (zoomable) {
+      if (pts.size === 1 && pinch) {
+        // 두 손가락 중 하나만 떼면 남은 손가락으로 이어서 이동
+        pinch = null;
+        const [rest] = [...pts.values()];
+        pan = { x: rest.x, y: rest.y, vx: view.x, vy: view.y };
+        vel = { x: 0, y: 0, t: performance.now() };
+      }
+      if (pts.size === 0) {
+        const wasPan = !!pan;
+        pan = null; pinch = null;
+        const idle = performance.now() - vel.t;
+        let vx = idle > 80 ? 0 : vel.x; let vy = idle > 80 ? 0 : vel.y;
+        if (wasPan && Math.hypot(vx, vy) > 0.25) {
+          let last = performance.now();
+          const step = (now) => {
+            const dt = Math.min(40, now - last); last = now;
+            view.x += vx * dt; view.y += vy * dt;
+            const decay = Math.pow(0.9, dt / 16);
+            vx *= decay; vy *= decay;
+            renderGesture();
+            if (Math.hypot(vx, vy) > 0.02) inertia = requestAnimationFrame(step);
+            else { inertia = 0; commitGesture(); }
+          };
+          inertia = requestAnimationFrame(step);
+        } else commitGesture();
+      }
+    }
     if (bgMoved > 8) return;
     const now = performance.now();
     const pt = { x: e.clientX, y: e.clientY };
@@ -304,16 +373,34 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     }
   };
   svg.addEventListener('pointerup', bgUp);
-  svg.addEventListener('pointercancel', (e) => { pts.delete(e.pointerId); pan = null; pinch = null; });
+  svg.addEventListener('pointercancel', (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size === 0) { pan = null; pinch = null; if (!inertia) commitGesture(); }
+  });
   if (zoomable) {
+    // 휠: 목표 배율로 부드럽게 따라가기
+    let wheel = null;
     svg.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const r = svg.getBoundingClientRect();
+      stopInertia();
+      beginGesture();
+      const r = gest.r0;
       const mx = e.clientX - r.left; const my = e.clientY - r.top;
-      const wx = (mx - view.x) / view.k; const wy = (my - view.y) / view.k;
-      view.k = Math.max(0.35, Math.min(3, view.k * Math.exp(-e.deltaY * 0.0015)));
-      view.x = mx - wx * view.k; view.y = my - wy * view.k;
-      applyView();
+      if (!wheel) wheel = { k: view.k };
+      wheel.k = clampK(wheel.k * Math.exp(-e.deltaY * 0.0015));
+      wheel.mx = mx; wheel.my = my;
+      wheel.wx = (mx - view.x) / view.k; wheel.wy = (my - view.y) / view.k;
+      if (wheelAnim) return;
+      const step = () => {
+        const nk = view.k + (wheel.k - view.k) * 0.25;
+        const wx = (wheel.mx - view.x) / view.k; const wy = (wheel.my - view.y) / view.k;
+        view.k = nk;
+        view.x = wheel.mx - wx * nk; view.y = wheel.my - wy * nk;
+        renderGesture();
+        if (Math.abs(wheel.k - view.k) > 0.002) wheelAnim = requestAnimationFrame(step);
+        else { wheelAnim = 0; wheel = null; commitGesture(); }
+      };
+      wheelAnim = requestAnimationFrame(step);
     }, { passive: false });
   }
 
@@ -407,13 +494,16 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
     const target = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
     if (!animate) { view = target; applyView(); return; }
+    stopInertia();
+    beginGesture();
     const from = { ...view }; const t0 = performance.now();
     const step = () => {
-      const p = Math.min(1, (performance.now() - t0) / 300);
+      const p = Math.min(1, (performance.now() - t0) / 320);
       const e = 1 - Math.pow(1 - p, 3);
       view = { k: from.k + (target.k - from.k) * e, x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e };
-      applyView();
+      renderGesture();
       if (p < 1) requestAnimationFrame(step);
+      else requestAnimationFrame(commitGesture);
     };
     step();
   }
@@ -449,6 +539,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   return {
     setData,
     fit: () => fit(true),
-    destroy: () => { cancelAnimationFrame(raf); svg.textContent = ''; },
+    destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
   };
 }
