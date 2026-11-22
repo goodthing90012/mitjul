@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.13.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1675,12 +1675,20 @@ async function underlineSheet(file, onUse, onPage) {
       <div class="btn-row"><button class="ghost" id="cropRotate" type="button">↻ 돌리기</button><button class="primary" id="cropGo" type="button">다음: 밑줄 긋기</button></div>
     </div>
     <div class="hl-step" hidden>
-      <p class="hint">문장 위를 <b>손가락으로 쭉 그으세요</b>. 여러 줄이면 줄마다 한 번씩 그어요.</p>
+      <p class="hint">문장 위를 <b>손가락으로 쭉 그으세요</b>. 여러 줄이면 줄마다 한 번씩. 그은 밑줄을 <b>톡</b> 하면 잡아서 옮기거나 양 끝을 끌어 길이를 바꿀 수 있어요.</p>
       <div class="hl-wrap"><canvas></canvas></div>
       <div class="hl-tools">
         <div class="seg" id="hlSize"><button type="button" data-s="0.026">가늘게</button><button type="button" data-s="0.038" class="on">보통</button><button type="button" data-s="0.055">굵게</button></div>
         <button class="ghost" id="hlUndo" type="button">↶</button>
         <button class="ghost" id="hlBack" type="button">✂</button>
+      </div>
+      <div class="hl-pad" id="hlPad" hidden>
+        <span class="hint small">고른 밑줄 옮기기</span>
+        <button type="button" data-mv="-1,0" aria-label="왼쪽">←</button>
+        <button type="button" data-mv="0,-1" aria-label="위">↑</button>
+        <button type="button" data-mv="0,1" aria-label="아래">↓</button>
+        <button type="button" data-mv="1,0" aria-label="오른쪽">→</button>
+        <button type="button" class="del" id="hlDel" aria-label="이 밑줄 지우기">🗑</button>
       </div>
       <div class="btn-row"><button class="primary" id="hlUse">이 밑줄 쓰기</button></div>
     </div>`, { full: true });
@@ -1749,12 +1757,15 @@ async function underlineSheet(file, onUse, onPage) {
     showCrop();
   };
 
-  // 형광펜 긋기
+  // 형광펜 긋기 (그은 밑줄은 톡 해서 골라 옮기기·길이 조절·방향키로 미세 조절)
   const cv = $('.hl-wrap canvas', body);
   const ctx = cv.getContext('2d');
   let cur = null;
+  let sel = null; // 고른 밑줄
+  let act = null; // 지금 하는 조작: { mode: 'move'|'a'|'b', p, s0 }
   const lw = () => Math.max(6, part.width * size);
-  const paintHl = () => {
+  const scr = () => cv.width / (cv.getBoundingClientRect().width || cv.width); // 화면 1px = 그림 몇 px
+  const paintHl = (clean) => {
     ctx.globalCompositeOperation = 'source-over';
     ctx.drawImage(part, 0, 0);
     ctx.globalCompositeOperation = 'multiply';
@@ -1768,51 +1779,120 @@ async function underlineSheet(file, onUse, onPage) {
       ctx.stroke();
     }
     ctx.globalCompositeOperation = 'source-over';
+    if (sel && !clean) {
+      // 고른 밑줄: 테두리 + 양 끝 손잡이
+      const k = scr();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(42, 33, 27, 0.85)';
+      ctx.lineWidth = 2 * k;
+      ctx.setLineDash([6 * k, 4 * k]);
+      const ang = Math.atan2(sel.y1 - sel.y0, sel.x1 - sel.x0);
+      const nx = -Math.sin(ang) * (sel.w / 2 + 3 * k); const ny = Math.cos(ang) * (sel.w / 2 + 3 * k);
+      ctx.beginPath();
+      ctx.moveTo(sel.x0 + nx, sel.y0 + ny); ctx.lineTo(sel.x1 + nx, sel.y1 + ny);
+      ctx.moveTo(sel.x0 - nx, sel.y0 - ny); ctx.lineTo(sel.x1 - nx, sel.y1 - ny);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const [x, y] of [[sel.x0, sel.y0], [sel.x1, sel.y1]]) {
+        ctx.beginPath(); ctx.arc(x, y, 9 * k, 0, Math.PI * 2);
+        ctx.fillStyle = '#fffaf0'; ctx.fill();
+        ctx.lineWidth = 3 * k; ctx.strokeStyle = '#2a211b'; ctx.stroke();
+      }
+      ctx.restore();
+    }
+    $('#hlPad', body).hidden = !sel;
   };
   const toImg = (e) => {
     const r = cv.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * cv.width, y: ((e.clientY - r.top) / r.height) * cv.height };
   };
+  const segDist = (st, p) => {
+    const dx = st.x1 - st.x0; const dy = st.y1 - st.y0; const L = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p.x - st.x0) * dx + (p.y - st.y0) * dy) / L));
+    return Math.hypot(p.x - (st.x0 + dx * t), p.y - (st.y0 + dy * t));
+  };
   cv.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     cv.setPointerCapture(e.pointerId);
     const p = toImg(e);
+    const k = scr();
+    // 1) 고른 밑줄의 양 끝 손잡이
+    if (sel) {
+      const r = 22 * k;
+      if (Math.hypot(p.x - sel.x0, p.y - sel.y0) < r) { act = { mode: 'a', p, s0: { ...sel } }; return; }
+      if (Math.hypot(p.x - sel.x1, p.y - sel.y1) < r) { act = { mode: 'b', p, s0: { ...sel } }; return; }
+    }
+    // 2) 이미 그은 밑줄 위 → 골라서 옮기기 (위에 있는 것부터)
+    const hit = [...strokes].reverse().find((st) => segDist(st, p) < st.w / 2 + 10 * k);
+    if (hit) { sel = hit; act = { mode: 'move', p, s0: { ...hit } }; paintHl(); return; }
+    // 3) 빈 곳 → 새로 긋기
+    sel = null;
     cur = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, w: lw() };
     paintHl();
   });
   cv.addEventListener('pointermove', (e) => {
-    if (!cur) return;
     const p = toImg(e);
+    if (act) {
+      const dx = p.x - act.p.x; const dy = p.y - act.p.y; const s0 = act.s0;
+      if (act.mode === 'move') Object.assign(sel, { x0: s0.x0 + dx, y0: s0.y0 + dy, x1: s0.x1 + dx, y1: s0.y1 + dy });
+      else if (act.mode === 'a') Object.assign(sel, { x0: s0.x0 + dx, y0: s0.y0 + dy });
+      else Object.assign(sel, { x1: s0.x1 + dx, y1: s0.y1 + dy });
+      paintHl();
+      return;
+    }
+    if (!cur) return;
     cur.x1 = p.x;
     // 거의 수평이면 반듯하게 (책 줄은 수평이니까)
     cur.y1 = Math.abs(p.y - cur.y0) < Math.abs(p.x - cur.x0) * 0.12 ? cur.y0 : p.y;
     paintHl();
   });
   const endHl = () => {
+    if (act) { act = null; paintHl(); return; }
     if (!cur) return;
-    if (Math.hypot(cur.x1 - cur.x0, cur.y1 - cur.y0) > cur.w * 0.6) strokes.push(cur);
+    if (Math.hypot(cur.x1 - cur.x0, cur.y1 - cur.y0) > cur.w * 0.6) { strokes.push(cur); sel = cur; } // 방금 그은 것을 바로 고른 상태로
     cur = null;
     paintHl();
   };
   cv.addEventListener('pointerup', endHl);
   cv.addEventListener('pointercancel', endHl);
+  // 방향키: 누르면 조금, 꾹 누르고 있으면 계속
+  const nudge = (mx, my) => {
+    if (!sel) return;
+    const st = 2 * scr();
+    sel.x0 += mx * st; sel.x1 += mx * st; sel.y0 += my * st; sel.y1 += my * st;
+    paintHl();
+  };
+  $$('#hlPad [data-mv]', body).forEach((b) => {
+    const [mx, my] = b.dataset.mv.split(',').map(Number);
+    let timer = null;
+    const stop = () => { clearTimeout(timer); clearInterval(timer); timer = null; };
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      nudge(mx, my);
+      timer = setTimeout(() => { timer = setInterval(() => nudge(mx, my), 45); }, 350);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => b.addEventListener(ev, stop));
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+  $('#hlDel', body).onclick = () => { strokes = strokes.filter((x) => x !== sel); sel = null; paintHl(); };
   $$('#hlSize button', body).forEach((b) => (b.onclick = () => {
     $$('#hlSize button', body).forEach((x) => x.classList.remove('on'));
     b.classList.add('on');
     size = +b.dataset.s;
   }));
-  $('#hlUndo', body).onclick = () => { strokes.pop(); paintHl(); };
+  $('#hlUndo', body).onclick = () => { const x = strokes.pop(); if (x === sel) sel = null; paintHl(); };
   $('#hlBack', body).onclick = () => showCrop();
   $('#cropGo', body).onclick = () => {
     part = fitForOcr(cropCanvas(src, crop), 1600);
     cv.width = part.width; cv.height = part.height;
     fitBox(cv, part.width, part.height, 0.58);
-    strokes = [];
+    strokes = []; sel = null;
     paintHl();
     step('hl');
   };
   $('#hlUse', body).onclick = async () => {
-    paintHl();
+    sel = null;
+    paintHl(true);
     // 그은 줄 위아래로 조금 여유를 두고 잘라서 카드에 쓰기
     let y0 = 0; let y1 = cv.height;
     if (strokes.length) {
