@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -612,7 +612,7 @@ function personCard(p, page, hit, checked) {
       <div class="pc-name">${esc(p.name)} ${p.family ? `<span class="fam" style="--fc:${familyColor(p.family)}">${esc(p.family)}</span>` : ''}${married ? ` → <span class="fam" style="--fc:${familyColor(p.marriedFamily)}">${esc(p.marriedFamily)}</span>` : ''}</div>
       ${hit && hit.kind !== '대표 이름' ? `<div class="pc-hit">‘${esc(hit.name)}’은(는) ${esc(hit.kind)}예요</div>` : ''}
       ${al.length ? `<div class="aliases">${al.map((a) => `<span class="alias"><i>${esc(a.kind)}</i>${esc(a.name)}${a.page ? `<small>p.${a.page}</small>` : ''}</span>`).join('')}</div>` : ''}
-      ${p.desc ? (p.descSpoiler ? `<button class="spoil-chip" type="button" data-unspoil="${p.id}">🙈 AI 설명 보기 <small>스포 주의</small></button>` : `<div class="pc-desc">${esc(p.desc)}</div>`) : ''}
+      ${p.desc ? (p.descSpoiler ? `<button class="spoil-chip" type="button" data-unspoil="${p.id}">🙈 설명 보기 <small>스포 주의</small></button>` : `<div class="pc-desc">${esc(p.desc)}</div>`) : ''}
     </div>
   </div>`;
 }
@@ -1117,8 +1117,8 @@ function personSheet(p) {
     <div class="field-title">다른 이름들 <small>애칭 · 호칭 · 결혼 후 이름 · 별명</small></div>
     <div id="aliasList">${(p.aliases || []).map(aliasRow).join('')}</div>
     <button class="ghost wide" id="addAlias" type="button">＋ 이름 추가</button>
-    <label>메모${p.descSpoiler ? ' <small>AI 설명 · 스포 주의</small>' : ''}</label>
-    ${p.descSpoiler ? `<button class="spoil-chip wide" type="button" id="pUnspoil">🙈 AI 설명 보기 <small>스포 주의 · 한 번 보면 계속 보여요</small></button>` : ''}
+    <label>메모${p.descSpoiler ? ' <small>스포 주의</small>' : ''}</label>
+    ${p.descSpoiler ? `<button class="spoil-chip wide" type="button" id="pUnspoil">🙈 설명 보기 <small>스포 주의 · 한 번 보면 계속 보여요</small></button>` : ''}
     <textarea id="pDesc" class="desc-area" rows="2" placeholder="어떤 사람인지 한 줄" ${p.descSpoiler ? 'hidden' : ''}>${esc(p.desc || '')}</textarea>
     <div class="btn-row">${isNew ? '' : '<button class="danger" id="pDel">삭제</button>'}<button class="primary" id="pSave">저장</button></div>`);
   const list = $('#aliasList', body);
