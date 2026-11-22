@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.6.3';
+const APP_VERSION = '1.7.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -158,6 +158,7 @@ const icon = {
   camera: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 18 5-5 3 3 2-2 4 4"/></svg>',
   paste: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 12h6M9 16h4"/></svg>',
+  shelf: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16M4 20h16"/><path d="M8 7v10M11.5 9v8M15 6l3 11"/></svg>',
   barcode: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6v12M7 6v12M11 6v12M14 6v12M18 6v12M20 6v12"/></svg>',
 };
 
@@ -279,13 +280,77 @@ function parseTags(s) {
 
 /* ================= 3D 책장 ================= */
 let shelf;
+/* ================= 책장 순서 ================= */
+const SORTS = { manual: '내가 정한 순서', added: '꽂은 순서', title: '제목 가나다', author: '저자 가나다', recent: '최근 밑줄 그은 책' };
+const getSort = () => { try { return localStorage.getItem('shelfSort') || 'added'; } catch { return 'added'; } };
+const setSort = (v) => { try { localStorage.setItem('shelfSort', v); } catch {} };
+function sortBooks(books, lastQ = {}) {
+  const mode = getSort();
+  const by = {
+    manual: (a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt),
+    added: (a, b) => a.createdAt - b.createdAt,
+    title: (a, b) => a.title.localeCompare(b.title, 'ko'),
+    author: (a, b) => ((a.authors || [])[0] || '').localeCompare((b.authors || [])[0] || '', 'ko') || a.title.localeCompare(b.title, 'ko'),
+    recent: (a, b) => (lastQ[b.id] || 0) - (lastQ[a.id] || 0) || a.createdAt - b.createdAt,
+  }[mode] || ((a, b) => a.createdAt - b.createdAt);
+  return [...books].sort(by);
+}
+
+async function shelfOrderSheet() {
+  const quotes = await db.all('quotes');
+  const lastQ = {};
+  for (const q of quotes) lastQ[q.bookId] = Math.max(lastQ[q.bookId] || 0, q.updatedAt || q.createdAt || 0);
+  const body = openSheet(`<h3>책장 정리</h3><div id="soBody"></div>`, { full: true });
+  const draw = () => {
+    const mode = getSort();
+    const books = sortBooks(state.books, lastQ);
+    const rows = [['reading', '읽는 중'], ['done', '다 읽은 책'], ['want', '읽을 책']];
+    $('#soBody', body).innerHTML = `
+      <div class="field-title">꽂는 순서</div>
+      <div class="seg" id="soMode">${Object.entries(SORTS).map(([k, v]) => `<button type="button" data-k="${k}" class="${k === mode ? 'on' : ''}">${v}</button>`).join('')}</div>
+      <p class="hint">${mode === 'manual' ? '▲▼로 칸 안에서 자리를 옮겨요.' : '▲▼를 누르면 <b>내가 정한 순서</b>로 바뀌어요.'} 칸(읽는 중·다 읽은·읽을)을 옮기려면 책을 열어 상태를 바꾸세요.</p>
+      ${rows.map(([key, label]) => {
+        const list = books.filter((b) => (b.status || 'reading') === key);
+        return `<h4 class="sec">${label} <small>${list.length}권</small></h4>${list.map((b, i) => `<div class="so-row" data-id="${b.id}">
+          <i class="so-spine" style="background:${colorOf(b.id) || bookColor(b.id + b.title)}"></i>
+          <div class="so-t"><b>${esc(b.title)}</b><small>${esc((b.authors || []).join(', '))}</small></div>
+          <button class="mini" data-mv="-1" ${i === 0 ? 'disabled' : ''} aria-label="위로">▲</button>
+          <button class="mini" data-mv="1" ${i === list.length - 1 ? 'disabled' : ''} aria-label="아래로">▼</button>
+        </div>`).join('') || '<div class="empty small">비어 있어요</div>'}`;
+      }).join('')}`;
+    $$('#soMode button', body).forEach((b) => (b.onclick = async () => { setSort(b.dataset.k); draw(); await reloadShelf(); }));
+    $$('.so-row [data-mv]', body).forEach((btn) => (btn.onclick = async () => {
+      const id = btn.closest('.so-row').dataset.id;
+      const cur = sortBooks(state.books, lastQ);
+      const me = cur.find((b) => b.id === id);
+      const row = cur.filter((b) => (b.status || 'reading') === (me.status || 'reading'));
+      const i = row.indexOf(me); const j = i + +btn.dataset.mv;
+      if (j < 0 || j >= row.length) return;
+      [row[i], row[j]] = [row[j], row[i]];
+      // 지금 보이는 순서를 그대로 '내가 정한 순서'로 저장
+      const all = cur.map((b) => b);
+      let k = 0;
+      const ordered = [];
+      for (const b of all) ordered.push((b.status || 'reading') === (me.status || 'reading') ? row[k++] : b);
+      for (let n = 0; n < ordered.length; n++) if (ordered[n].order !== n) { ordered[n] = { ...ordered[n], order: n }; await db.put('books', ordered[n]); }
+      setSort('manual');
+      await loadBooks();
+      draw();
+      await reloadShelf();
+    }));
+  };
+  draw();
+}
+
 async function reloadShelf() {
   await loadBooks();
   if (shelf.openState) { state.shelfDirty = true; return; }
   const quotes = await db.all('quotes');
   const byBook = {};
   for (const q of quotes) (byBook[q.bookId] ||= []).push(q.page || 0);
-  shelf.setBooks(state.books.map((b) => ({ ...b, quotePages: (byBook[b.id] || []).sort((a, c) => a - c) })));
+  const lastQ = {};
+  for (const q of quotes) lastQ[q.bookId] = Math.max(lastQ[q.bookId] || 0, q.updatedAt || q.createdAt || 0);
+  shelf.setBooks(sortBooks(state.books, lastQ).map((b) => ({ ...b, quotePages: (byBook[b.id] || []).sort((a, c) => a - c) })));
   state.shelfDirty = false;
   $('#emptyHint').hidden = state.books.length > 0;
   renderToday(quotes);
@@ -2209,6 +2274,8 @@ async function init() {
   $('#btnSettings').innerHTML = icon.gear;
   $('#btnSearch').onclick = searchSheet;
   $('#btnSettings').onclick = settingsSheet;
+  $('#btnShelf').innerHTML = icon.shelf;
+  $('#btnShelf').onclick = shelfOrderSheet;
   $('#fab').onclick = addBookSheet;
   $('#btnBack').onclick = back;
 
