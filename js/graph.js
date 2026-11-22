@@ -143,13 +143,11 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       if (e.label) {
         e._lg = el('g', { 'pointer-events': e.spoiler ? 'auto' : 'none', class: e.spoiler ? 'glabel-tap' : '' }, gLabels);
         if (e.spoiler) {
-          let down = null;
-          e._lg.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); down = { x: ev.clientX, y: ev.clientY }; });
-          e._lg.addEventListener('pointerup', (ev) => {
-            ev.stopPropagation();
-            if (down && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) < 10) onSpoilerTap?.(e.id);
-            down = null;
-          });
+          // 폰에선 손가락이 살짝만 움직여도 pointerup이 안 올 수 있어서 click으로 (브라우저가 톡을 판정)
+          e._lg.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+          e._lg.addEventListener('pointerup', (ev) => ev.stopPropagation());
+          e._lg.addEventListener('click', (ev) => { ev.stopPropagation(); onSpoilerTap?.(e.id); });
+          e._hit = el('rect', { fill: 'transparent' }, e._lg); // 손가락으로 누르기 쉽게 넓은 영역
         }
         e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
         e._tx = el('text', { 'font-size': 11, fill: k.color, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': 600 }, e._lg);
@@ -681,6 +679,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
         e._ts.forEach((t, i) => { t.setAttribute('x', mx); t.setAttribute('y', my + (i - (e._ts.length - 1) / 2) * 13); });
         e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - lh / 2);
         e._bg.setAttribute('width', tw + 12); e._bg.setAttribute('height', lh);
+        if (e._hit) { e._hit.setAttribute('x', mx - tw / 2 - 18); e._hit.setAttribute('y', my - lh / 2 - 12); e._hit.setAttribute('width', tw + 36); e._hit.setAttribute('height', lh + 24); }
       }
     }
     for (const n of nodes.values()) n._g.setAttribute('transform', `translate(${n.x},${n.y})`);

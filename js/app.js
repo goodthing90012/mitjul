@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.11.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -957,10 +957,7 @@ async function revealRel(r, after) {
   await db.put('relations', { ...r, spoiler: false, page: r.page || currentReadPage() });
   await afterChange();
   after?.();
-  toast(r.label ? `‘${r.label}’ 관계가 열렸어요` : '관계가 열렸어요', 0, {
-    label: '되돌리기',
-    fn: async () => { await db.put('relations', r); await afterChange(); after?.(); toast('다시 가렸어요'); },
-  });
+  toast(r.label ? `‘${r.label}’ 관계가 열렸어요` : '관계가 열렸어요');
 }
 function quickRelSheet(a, b, after) {
   const body = openSheet(`
