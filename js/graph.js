@@ -192,19 +192,21 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   /* ---- 스포트라이트: 톡 한 인물을 가운데, 이어진 사람을 둥글게, 관계 이름은 선 위에 겹치지 않게 ---- */
   let saved = null;   // 강조 전 자리 (풀면 되돌아감)
   let tween = 0;
-  function animateTo(targets, dur, done) {
+  function animateTo(targets, dur, viewTo, done) {
     cancelAnimationFrame(tween);
     cancelAnimationFrame(raf); raf = 0;
+    cancelAnimationFrame(fitAnim); fitAnim = 0;
     const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    const v0 = { ...view };
     const t0 = performance.now();
-    const step = () => {
-      const p = Math.min(1, (performance.now() - t0) / dur);
-      const e = 1 - Math.pow(1 - p, 3);
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // 천천히-빠르게-천천히
       for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
-      placeLabels();
-      draw();
+      if (viewTo) { view = { k: v0.k + (viewTo.k - v0.k) * e, x: v0.x + (viewTo.x - v0.x) * e, y: v0.y + (viewTo.y - v0.y) * e }; applyView(); }
+      draw(); // 관계 이름 자리 계산은 끝나고 한 번만
       if (p < 1) tween = requestAnimationFrame(step);
-      else { tween = 0; done?.(); }
+      else { tween = 0; placeLabels(); draw(); done?.(); }
     };
     tween = requestAnimationFrame(step);
   }
@@ -217,7 +219,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       if (saved) {
         const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
         saved = null;
-        animateTo(back, 380, () => fit(true));
+        autoFit = true;
+        animateTo(back, 480, fitTargetFor(back, null));
       }
       return;
     }
@@ -248,7 +251,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       const out = Math.max(d, R + K);
       targets.set(n, { x: center.x + (dx / d) * out, y: center.y + (dy / d) * out });
     }
-    animateTo(targets, 420, () => fit(true));
+    animateTo(targets, 480, fitTargetFor(targets, id));
   }
   // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
   // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)
@@ -590,6 +593,25 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   }
 
   // 전체가 화면에 들어오게 (인라인은 축소만, 크게 보기는 확대도)
+  function viewFor(x0, y0, x1, y1, w, h) {
+    const pad = 14;
+    const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
+    return { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
+  }
+  // 애니메이션이 끝났을 때의 자리로 미리 화면 맞춤 값을 계산 (이동과 확대를 한 번에)
+  function fitTargetFor(targets, focusId) {
+    const { w, h } = size();
+    let near = null;
+    if (focusId) { near = new Set([focusId]); for (const e of edges) if (e.from === focusId || e.to === focusId) { near.add(e.from); near.add(e.to); } }
+    let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+    for (const n of nodes.values()) {
+      if (near && !near.has(n.p.id)) continue;
+      const t = targets.get(n) || n;
+      x0 = Math.min(x0, t.x - n.bw / 2); x1 = Math.max(x1, t.x + n.bw / 2);
+      y0 = Math.min(y0, t.y - NODE_R - 4); y1 = Math.max(y1, t.y + n.bh - NODE_R);
+    }
+    return viewFor(x0, y0, x1, y1, w, h);
+  }
   let fitAnim = 0;
   let autoFit = true; // 사용자가 직접 옮기거나 확대하기 전까지는 항상 전체가 보이게
   function fit(animate = true) {
@@ -608,9 +630,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       x0 = Math.min(x0, n.x - n.bw / 2); x1 = Math.max(x1, n.x + n.bw / 2);
       y0 = Math.min(y0, n.y - NODE_R - 4); y1 = Math.max(y1, n.y + n.bh - NODE_R);
     }
-    const pad = 14;
-    const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
-    const target = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
+    const target = viewFor(x0, y0, x1, y1, w, h);
     if (!animate) { view = target; applyView(); return; }
     // svg 요소를 CSS로 줄이면 바깥이 잘려 보이므로, 맞추기 애니메이션은 안쪽 그룹만 움직임
     stopInertia();
