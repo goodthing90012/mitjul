@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.14.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1794,9 +1794,10 @@ async function underlineSheet(file, onUse, onPage) {
       ctx.stroke();
       ctx.setLineDash([]);
       for (const [x, y] of [[sel.x0, sel.y0], [sel.x1, sel.y1]]) {
-        ctx.beginPath(); ctx.arc(x, y, 9 * k, 0, Math.PI * 2);
-        ctx.fillStyle = '#fffaf0'; ctx.fill();
-        ctx.lineWidth = 3 * k; ctx.strokeStyle = '#2a211b'; ctx.stroke();
+        // 속이 비치는 작은 손잡이 (글자가 가려지지 않게). 잡는 범위는 그대로 넓게
+        ctx.beginPath(); ctx.arc(x, y, 6 * k, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 250, 240, 0.25)'; ctx.fill();
+        ctx.lineWidth = 2 * k; ctx.strokeStyle = 'rgba(42, 33, 27, 0.9)'; ctx.stroke();
       }
       ctx.restore();
     }
