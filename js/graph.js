@@ -44,6 +44,14 @@ const el = (tag, attrs = {}, parent) => {
 // - 톡 = 그 인물의 관계만 강조(관계 이름 표시), 한 번 더 톡 = 편집
 // - zoomable이면 빈 곳 끌기 = 이동, 두 손가락 = 확대/축소
 const GP = { rep: 0.02, grav: 0.06, spring: 0.05, kmin: 85, kmax: 150, kf: 0.8 }; // 간격·끌어당김 세기
+function splitLabel(t) {
+  if (t.length <= 8) return [t];
+  const mid = t.length / 2; let best = -1;
+  for (let i = 1; i < t.length; i++) if (t[i] === ' ' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
+  if (best > 0 && Math.abs(best - mid) <= t.length * 0.3) return [t.slice(0, best), t.slice(best + 1)];
+  const c = Math.ceil(mid); return [t.slice(0, c), t.slice(c)];
+}
+
 export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
@@ -75,7 +83,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     const vis = people.filter((p) => (p.firstPage || 0) <= page);
     const n = Math.max(vis.length, 1);
     // 관계 이름이 선 위에 들어갈 만큼 간격 확보
-    const avgLabel = relations.length ? relations.reduce((sum, r) => sum + Math.min(9, (r.label || '').length), 0) / relations.length : 0;
+    const avgLabel = relations.length ? relations.reduce((sum, r) => sum + Math.min(10, Math.ceil((r.label || '').length / ((r.label || '').length > 8 ? 2 : 1)) + 2), 0) / relations.length : 0;
     K = Math.max(GP.kmin, 55 + avgLabel * 12, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
     const next = new Map();
     let fresh = 0;
@@ -132,8 +140,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
         e._lg = el('g', { 'pointer-events': 'none' }, gLabels);
         e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
         e._tx = el('text', { 'font-size': 11, fill: k.color, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': 600 }, e._lg);
-        // 관계도 위에는 짧게 (전체 이름은 목록과 편집에서)
-        e._tx.textContent = e.label.length > 9 ? e.label.slice(0, 8) + '…' : e.label;
+        // 말줄임 없이 전부. 길면 띄어쓰기 기준으로 두 줄
+        e._rows = splitLabel(e.label);
+        e._ts = e._rows.map((r) => { const t = el('tspan', {}, e._tx); t.textContent = r; return t; });
       }
     }
     for (const n of nodes.values()) {
@@ -220,8 +229,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     const nbrs = [...new Set(mine.map((e) => (e.from === id ? e.to : e.from)))].map((x) => nodes.get(x));
     // 지금 보이는 방향을 유지한 채 고르게 둥글게 배치
     nbrs.sort((a, b) => Math.atan2(saved.get(a).y - center.y, saved.get(a).x - center.x) - Math.atan2(saved.get(b).y - center.y, saved.get(b).x - center.x));
-    const labelW = Math.max(60, ...mine.map((e) => (e._tw || e.label?.length * 11 || 0) + 16));
-    const ringByCount = (nbrs.length * Math.max(labelW, 70)) / (2 * Math.PI) * 1.3; // 둘레에 이름·관계 이름이 들어갈 만큼
+    const lw = Math.max(60, ...mine.map((e) => (e._lg ? labelW(e) : 0) + 16));
+    const ringByCount = (nbrs.length * Math.max(lw, 70)) / (2 * Math.PI) * 1.3; // 둘레에 이름·관계 이름이 들어갈 만큼
     const R = Math.max(K * 1.4, 120, ringByCount);
     const a0 = nbrs.length ? Math.atan2(saved.get(nbrs[0]).y - center.y, saved.get(nbrs[0]).x - center.x) : 0;
     const targets = new Map();
@@ -242,6 +251,12 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   }
   // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
   // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)
+  function labelW(e) {
+    if (e._tw) return e._tw;
+    let w = 0; for (const t of e._ts) w = Math.max(w, t.getComputedTextLength?.() || 0);
+    return (e._tw = w || Math.max(...e._rows.map((r) => r.length)) * 11);
+  }
+  function labelH(e) { return e._rows.length > 1 ? 31 : 18; }
   function placeLabels() {
     const boxes = [...nodes.values()].map((n) => ({ x0: n.x - n.bw / 2 - 2, x1: n.x + n.bw / 2 + 2, y0: n.y - NODE_R - 2, y1: n.y - NODE_R + n.bh }));
     const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
@@ -253,10 +268,10 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     for (const { e, a: a0, b: b0 } of list) {
       // 강조 중이면 가운데 인물 쪽에서부터 재기
       const a = focus && e.to === focus ? b0 : a0; const b = focus && e.to === focus ? a0 : b0;
-      const tw = (e._tw || e.label.length * 11) + 14;
+      const tw = labelW(e) + 14; const hh = labelH(e) / 2 + 2;
       for (const t of [0.5, 0.42, 0.58, 0.35, 0.65, 0.28, 0.72]) {
         const x = a.x + (b.x - a.x) * t; const y = a.y + (b.y - a.y) * t;
-        const box = { x0: x - tw / 2, x1: x + tw / 2, y0: y - 11, y1: y + 11 };
+        const box = { x0: x - tw / 2, x1: x + tw / 2, y0: y - hh, y1: y + hh };
         if (!hit(box)) { e._t = t; e._from = a.p.id; e._vis = true; boxes.push(box); break; }
       }
     }
@@ -616,10 +631,11 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
           const f = e._from === b.p.id ? b : a; const o = f === a ? b : a;
           mx = f.x + (o.x - f.x) * e._t; my = f.y + (o.y - f.y) * e._t;
         }
-        const tw = e._tw || (e._tw = e._tx.getComputedTextLength?.() || e.label.length * 11);
+        const tw = labelW(e); const lh = labelH(e);
         e._tx.setAttribute('x', mx); e._tx.setAttribute('y', my);
-        e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - 9);
-        e._bg.setAttribute('width', tw + 12); e._bg.setAttribute('height', 18);
+        e._ts.forEach((t, i) => { t.setAttribute('x', mx); t.setAttribute('y', my + (i - (e._ts.length - 1) / 2) * 13); });
+        e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - lh / 2);
+        e._bg.setAttribute('width', tw + 12); e._bg.setAttribute('height', lh);
       }
     }
     for (const n of nodes.values()) n._g.setAttribute('transform', `translate(${n.x},${n.y})`);
