@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.16.1';
+const APP_VERSION = '1.17.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -407,6 +407,38 @@ async function reloadShelf() {
   renderToday(quotes);
 }
 
+// 꾹 누르면 복사 (글자 선택은 막아 두었으니 대신)
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.cssText = 'position:fixed;opacity:0;left:-9999px';
+    document.body.append(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch { return false; }
+}
+function longPressCopy(el, getText) {
+  let timer = null; let start = null; let fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; el.classList.remove('pressing'); };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    fired = false; start = { x: e.clientX, y: e.clientY };
+    el.classList.add('pressing');
+    timer = setTimeout(async () => {
+      timer = null; fired = true; el.classList.remove('pressing');
+      const t = getText();
+      if (!t) return;
+      navigator.vibrate?.(15);
+      toast((await copyText(t)) ? '복사했어요' : '복사하지 못했어요');
+    }, 500);
+  });
+  el.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => el.addEventListener(ev, cancel));
+  // 꾹 누른 뒤 손을 떼면 편집이 열리지 않게
+  el.addEventListener('click', (e) => { if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
 // 오늘의 한 줄: 홈엔 ✨ 버튼만, 누르면 카드로
 function renderToday(quotes) {
   $('#today').hidden = true;
@@ -431,8 +463,10 @@ function todaySheet() {
       ${q.image && !q.text ? `<img class="today-img" src="${q.image}" alt="">` : ''}
       <div class="today-src">${esc(b.title)} · p.${q.page || '?'}</div>
     </div>
+    ${q.text ? '<p class="hint center">문장을 꾹 누르면 복사돼요</p>' : ''}
     <button class="primary wide" id="todayGo" type="button" style="width:100%">이 밑줄 보러 가기</button>`);
   $('#todayGo', body).onclick = async () => { await closeTop(); openBook(b.id, q.id); };
+  q.text && longPressCopy($('.today-card', body), () => q.text);
 }
 
 /* 펼친 책 안쪽 페이지 그림 */
@@ -706,6 +740,10 @@ function renderQuotes() {
     </article>`).join('');
   $('#importLink').onclick = () => importSheet();
   $('#draftChip') && ($('#draftChip').onclick = () => { state.onlyDrafts = !state.onlyDrafts; renderQuotes(); });
+  $$('.q', body).forEach((a) => {
+    const q = quotes.find((x) => x.id === a.dataset.id);
+    if (q?.text) longPressCopy(a, () => q.text);
+  });
   $$('.q', body).forEach((a) => (a.onclick = (e) => {
     const nm = e.target.closest('.nm');
     const q = quotes.find((x) => x.id === a.dataset.id);

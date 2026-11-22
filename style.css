@@ -545,3 +545,6 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 #btnSettings { position: relative; }
 #btnSettings.has-dot::after { content: ''; position: absolute; top: 6px; right: 6px; width: 11px; height: 11px; border-radius: 50%; background: #d9483b; border: 2px solid #fffaf0; }
 .upd-new { color: #d9483b; }
+/* 꾹 눌러 복사: 누르는 동안 살짝 눌린 느낌 */
+.q, .today-card { transition: transform .5s ease, background-color .5s ease; }
+.q.pressing, .today-card.pressing { transform: scale(.985); background-color: #fbf1dc; }
