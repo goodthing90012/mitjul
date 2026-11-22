@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.9.8';
+const APP_VERSION = '1.10.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -57,13 +57,20 @@ addEventListener('popstate', () => {
 
 /* ================= 공통 UI ================= */
 let toastTimer;
-function toast(msg, ms) {
+function toast(msg, ms, action) {
   const t = $('#toast');
   t.textContent = msg;
+  // 되돌리기 같은 버튼이 있으면 그 버튼만 눌리게 (나머지는 아래 버튼을 가리지 않음)
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'toast-act'; b.textContent = action.label;
+    b.onclick = async () => { clearTimeout(toastTimer); t.classList.remove('on'); await action.fn(); };
+    t.append(' ', b);
+  }
   t.classList.add('on');
   clearTimeout(toastTimer);
-  // 글자 수에 맞춰 충분히 보여주기 (최소 3.5초)
-  toastTimer = setTimeout(() => t.classList.remove('on'), ms || Math.max(3500, msg.length * 120));
+  // 글자 수에 맞춰 충분히 보여주기 (최소 3.5초, 버튼 있으면 6초)
+  toastTimer = setTimeout(() => t.classList.remove('on'), ms || Math.max(action ? 6000 : 3500, msg.length * 120));
 }
 function notice(el, html, kind = 'warn') {
   el.innerHTML = `<div class="notice ${kind}">${html}</div>`;
@@ -253,7 +260,17 @@ async function revealPerson(id) {
   const before = state.current.relations.length;
   await afterChange();
   const n = state.current.relations.length - before;
-  toast(`${p.name}을(를) 만났어요${n > 0 ? ` · 관계 ${n}개가 이어졌어요` : ''}`);
+  toast(`${p.name}을(를) 만났어요${n > 0 ? ` · 관계 ${n}개가 이어졌어요` : ''}`, 0, {
+    label: '되돌리기',
+    fn: async () => { await db.put('people', raw); await afterChange(); toast(`${p.name}을(를) 다시 가렸어요`); },
+  });
+}
+// 잘못 열었을 때: 다시 '다음에 만날 인물'로 (순서는 그대로)
+async function rehidePerson(p) {
+  const raw = state.current.allPeople.find((x) => x.id === p.id) || p;
+  await db.put('people', { ...raw, hidden: true });
+  await afterChange();
+  toast(`${p.name}을(를) 다시 가렸어요 · 다음에 만날 인물로 돌아갔어요`);
 }
 // 같은 두 사람 사이의 다음 관계 단계 열기 (호감 → 약혼 → 파혼)
 async function nextStage(rel) {
@@ -1230,7 +1247,9 @@ function personSheet(p) {
     <label>메모${p.descSpoiler ? ' <small>스포 주의</small>' : ''}</label>
     ${p.descSpoiler ? `<button class="spoil-chip wide" type="button" id="pUnspoil">🙈 설명 보기 <small>스포 주의 · 한 번 보면 계속 보여요</small></button>` : ''}
     <textarea id="pDesc" class="desc-area" rows="2" placeholder="어떤 사람인지 한 줄" ${p.descSpoiler ? 'hidden' : ''}>${esc(p.desc || '')}</textarea>
+    ${!isNew && p.order != null ? '<button class="ghost wide" id="pRehide" type="button">🙈 아직 안 만났어요 (다시 가리기)</button>' : ''}
     <div class="btn-row">${isNew ? '' : '<button class="danger" id="pDel">삭제</button>'}<button class="primary" id="pSave">저장</button></div>`);
+  $('#pRehide', body) && ($('#pRehide', body).onclick = async () => { await closeTop(); await rehidePerson(p); });
   const list = $('#aliasList', body);
   $('#pNames', body) && ($('#pNames', body).onclick = async () => {
     if (!confirm('가려둔 이름과 결혼 정보를 볼까요? 뒷이야기가 보일 수 있어요.')) return;

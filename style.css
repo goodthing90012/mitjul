@@ -510,3 +510,6 @@ textarea.desc-area[hidden] { display: none; }
 /* 관계도 애니메이션: 관계 이름은 페이드, 움직이는 동안 글자는 빠른 렌더링 */
 .graph-box svg g.glabels { transition: opacity .22s ease; }
 .graph-box svg.anim text { text-rendering: optimizeSpeed; }
+/* 토스트 안 버튼 (되돌리기): 이 버튼만 눌림 */
+#toast .toast-act { pointer-events: auto !important; margin-left: 8px; min-height: 32px; height: 32px; padding: 0 12px; border-radius: 16px; border: 0; background: #fffaf0; color: #2a211b; font-weight: 700; font-size: 13px; vertical-align: middle; }
+#toast:not(.on) .toast-act { pointer-events: none !important; }
