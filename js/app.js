@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -62,9 +62,8 @@ function toast(msg, ms) {
   t.textContent = msg;
   t.classList.add('on');
   clearTimeout(toastTimer);
-  // 글자 수에 맞춰 충분히 보여주기 (최소 3.5초), 누르면 닫힘
+  // 글자 수에 맞춰 충분히 보여주기 (최소 3.5초)
   toastTimer = setTimeout(() => t.classList.remove('on'), ms || Math.max(3500, msg.length * 120));
-  t.onclick = () => t.classList.remove('on');
 }
 function notice(el, html, kind = 'warn') {
   el.innerHTML = `<div class="notice ${kind}">${html}</div>`;
@@ -1149,15 +1148,30 @@ ${JSON.stringify(JSON_EXAMPLE, null, 2)}`;
     try { await navigator.clipboard.writeText(prompt); toast('요청문을 복사했어요. AI에게 붙여넣으세요'); }
     catch { ta.value = prompt; toast('복사가 안 돼서 아래 칸에 넣어뒀어요. 직접 복사해 주세요'); }
   };
-  $('#pjApply', body).onclick = async () => {
-    const ch = +$('#pjCh', body).value || 0;
-    if (ch && ch !== (book.chapter || 0)) await db.put('books', { ...book, chapter: ch });
-    const { newNames, relCount } = await applyPeoplePlan(plan, { hide: true });
-    await afterChange();
-    await closeTop();
-    const opened = state.current.people.length;
-    toast(`가려서 넣었어요: 인물 ${newNames.length}명, 관계 ${relCount}개 · 지금 보이는 인물 ${opened}명`);
+  const applyBtn = $('#pjApply', body);
+  // 키보드가 닫히면서 버튼이 움직여 첫 탭이 빗나가는 걸 막기 위해 누르는 순간(pointerdown)에도 반응
+  let running = false;
+  const doApply = async () => {
+    if (running || applyBtn.disabled) return;
+    running = true;
+    applyBtn.textContent = '넣는 중…';
+    try {
+      const ch = +$('#pjCh', body).value || 0;
+      if (ch && ch !== (book.chapter || 0)) await db.put('books', { ...state.current.book, chapter: ch });
+      const { newNames, relCount } = await applyPeoplePlan(plan, { hide: true });
+      await closeTop();
+      try { await afterChange(); } catch (e) { console.error(e); }
+      const opened = state.current?.people.length || 0;
+      toast(`가려서 넣었어요: 인물 ${newNames.length}명, 관계 ${relCount}개 · 지금 보이는 인물 ${opened}명`);
+    } catch (e) {
+      console.error(e);
+      toast('넣다가 문제가 생겼어요: ' + (e?.message || e), 6000);
+      applyBtn.textContent = '가려서 넣기';
+      running = false;
+    }
   };
+  applyBtn.onclick = doApply;
+  applyBtn.addEventListener('pointerup', (e) => { if (e.pointerType !== 'mouse') doApply(); });
 }
 
 function aliasRow(a = {}) {
@@ -2267,6 +2281,10 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   unspoilDesc(el.dataset.unspoil);
 }, true);
+
+// 예상 못 한 오류가 조용히 묻히지 않게 화면에 알려주기
+addEventListener('unhandledrejection', (e) => { console.error(e.reason); toast('문제가 생겼어요: ' + (e.reason?.message || e.reason), 6000); });
+addEventListener('error', (e) => { if (e.message && !/ResizeObserver/.test(e.message)) toast('문제가 생겼어요: ' + e.message, 6000); });
 
 /* ================= 시작 ================= */
 async function init() {
