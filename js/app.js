@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.11.1';
+const APP_VERSION = '1.12.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -767,6 +767,7 @@ function renderPeople() {
     </div>` : '';
   const chapterBar = '';
   const bindHidden = () => {
+    bindSpoilerBox(document);
     $('#openAll') && ($('#openAll').onclick = () => revealAll());
     $$('[data-open-rel]').forEach((b) => (b.onclick = () => revealRelation(b.dataset.openRel)));
     $$('.hidden-box [data-reveal]').forEach((b) => (b.onclick = () => revealPerson(b.dataset.reveal)));
@@ -802,6 +803,7 @@ function renderPeople() {
     <h4 class="sec">인물 ${sel === 'people' ? `<small>전체 ${people.length + hiddenPeople.length}명 · 쪽수와 상관없이 모두 보여요</small>` : ''}${!sel ? '<button class="link sec-act" id="selPeople" type="button">선택 삭제</button>' : ''}</h4>
     <div class="people ${sel === 'people' ? 'selecting' : ''}">${(sel === 'people' ? people : people.filter((p) => (p.firstPage || 0) <= page)).map((p) => personCard(p, page, null, sel === 'people' ? state.sel.has(p.id) : undefined)).join('') || '<div class="empty small">이 쪽까지 나온 인물이 없어요</div>'}${sel === 'people' ? hiddenPeople.map((p) => `<div class="pcard ${state.sel.has(p.id) ? 'picked' : ''}" data-pid="${p.id}"><span class="ck ${state.sel.has(p.id) ? 'on' : ''}"></span><div class="pc-main"><div class="pc-name">??? <small class="muted">가려진 인물</small></div></div></div>`).join('') : ''}</div>
     ${sel ? '' : hiddenBox}
+    ${sel ? '' : spoilerBoxHtml()}
     ${sel === 'people' ? '' : `<h4 class="sec">관계 ${sel === 'rels' ? `<small>전체 ${relations.length + hiddenRels.length}개</small>` : ''}${!sel && (relations.length || hiddenRels.length) ? '<button class="link sec-act" id="selRels" type="button">선택 삭제</button>' : ''}</h4>
     <div class="rels ${sel === 'rels' ? 'selecting' : ''}">${sel === 'rels' ? hiddenRels.map((r) => `<button class="rel ${state.sel.has(r.id) ? 'picked' : ''}" data-rid="${r.id}"><span class="ck ${state.sel.has(r.id) ? 'on' : ''}"></span>??? <small class="muted">가려진 관계</small></button>`).join('') : ''}${(sel === 'rels' ? relations : relations.filter((r) => (r.page || 0) <= page)).slice().sort((a, b) => (a.page || 0) - (b.page || 0)).map((r) => {
       const a = people.find((p) => p.id === r.from); const b = people.find((p) => p.id === r.to);
@@ -911,10 +913,17 @@ function graphSheet(maxP) {
     <div class="slider">
       <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>
       <input type="range" id="bigSlider" min="0" max="${maxP}" value="${state.graphPage}">
-    </div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
+    </div>
+    <div id="bigSpoil">${spoilerBoxHtml()}</div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
   requestAnimationFrame(() => {
-    g = createGraph($('#graphBig', body), { ...graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage)), zoomable: true });
+    const refresh = () => {
+      g?.setData(state.current.people, state.current.relations, state.graphPage);
+      $('#bigSpoil', body).innerHTML = spoilerBoxHtml();
+      bindSpoilerBox($('#bigSpoil', body), refresh);
+    };
+    g = createGraph($('#graphBig', body), { ...graphHandlers(refresh), zoomable: true });
     g.setData(people, relations, state.graphPage);
+    bindSpoilerBox($('#bigSpoil', body), refresh);
     $('#graphFit', body).onclick = () => g.fit();
   });
   const sl = $('#bigSlider', body);
@@ -935,8 +944,25 @@ function graphHandlers(after) {
     onNodeTap: (p) => personSheet(p),
     onLink: (a, b) => quickRelSheet(a, b, after),
     onEmptyDoubleTap: () => quickPersonSheet(after),
-    onSpoilerTap: (id) => spoilerRelSheet(id, after),
   };
+}
+// 스포 관계 목록: 관계도 아래 표로 모아서 '일어났어요'로 열기 (만난 두 사람 사이만)
+function spoilerBoxHtml() {
+  const { relations, people } = state.current;
+  const nm = (id) => people.find((p) => p.id === id)?.name;
+  const list = relations.filter((r) => r.spoiler && nm(r.from) && nm(r.to));
+  if (!list.length) return '';
+  return `<div class="hidden-box spoil-box">
+    <div class="hb-head">🙈 아직 안 일어난 일 <small>${list.length}개</small></div>
+    <p class="hint">관계도에 <b>🙈 ?</b>로 가려진 관계예요. 책에서 그 일이 일어나면 <b>일어났어요</b>를 누르세요.</p>
+    ${list.map((r) => `<div class="hrel"><span>${esc(nm(r.from))} — ${esc(nm(r.to))}</span><button class="mini" data-happen="${r.id}" type="button">일어났어요</button></div>`).join('')}
+  </div>`;
+}
+function bindSpoilerBox(root, after) {
+  $$('[data-happen]', root).forEach((b) => (b.onclick = async () => {
+    const r = state.current.allRelations.find((x) => x.id === b.dataset.happen);
+    if (r) await revealRel(r, after);
+  }));
 }
 // 스포 관계: 책에서 그 일이 일어나면 열기
 function spoilerRelSheet(id, after) {

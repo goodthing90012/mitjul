@@ -123,9 +123,17 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       for (let i = 0; i < 320; i++) tick();
       separate(80);
       placeLabels();
+      for (let round = 0; round < 4 && growHidden(); round++) {
+        alpha = 0.5;
+        for (let i = 0; i < 90; i++) tick();
+        separate(40);
+        placeLabels();
+      }
       fit(false);
     }
-    alpha = fresh ? 0.04 : Math.max(alpha, 0.25);
+    // 관계 이름이 길어져서(스포 관계가 열리는 등) 선이 짧으면 힘을 더 줘서 부드럽게 벌어지게
+    const tight = edges.some((e) => { if (!e._lg) return false; const a = nodes.get(e.from); const b = nodes.get(e.to); return Math.hypot(b.x - a.x, b.y - a.y) < needLen(e, a, b) - 8; });
+    alpha = fresh ? 0.04 : Math.max(alpha, tight ? 0.8 : 0.25);
     draw();
     kick();
   }
@@ -141,8 +149,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       e._lg = null;
       if (e.spoiler) e.label = '🙈 ?';
       if (e.label) {
-        e._lg = el('g', { 'pointer-events': e.spoiler ? 'auto' : 'none', class: e.spoiler ? 'glabel-tap' : '' }, gLabels);
-        if (e.spoiler) {
+        const tap = e.spoiler && onSpoilerTap;
+        e._lg = el('g', { 'pointer-events': tap ? 'auto' : 'none', class: tap ? 'glabel-tap' : '' }, gLabels);
+        if (tap) {
           // 폰에선 손가락이 살짝만 움직여도 pointerup이 안 올 수 있어서 click으로 (브라우저가 톡을 판정)
           e._lg.addEventListener('pointerdown', (ev) => ev.stopPropagation());
           e._lg.addEventListener('pointerup', (ev) => ev.stopPropagation());
@@ -276,7 +285,32 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     let w = 0; for (const t of e._ts) w = Math.max(w, t.getComputedTextLength?.() || 0);
     return (e._tw = w || Math.max(...e._rows.map((r) => r.length)) * 11);
   }
+  // 관계 이름 + 양쪽 이름표가 겹치지 않으려면 필요한 선 길이
+  function needLen(e, a, b) { return labelW(e) + 14 + (a.bw + b.bw) / 2 + 16 + (e._extra || 0); }
   function labelH(e) { return e._rows.length > 1 ? 31 : 18; }
+  // 자리가 없어 숨은 관계 이름이 있으면 그 선만 조금 더 늘려달라고 표시 (최대 몇 번)
+  function growHidden() {
+    let grew = false;
+    for (const e of edges) if (e._lg && !e._vis && (e._extra || 0) < 120) { e._extra = (e._extra || 0) + 30; grew = true; }
+    return grew;
+  }
+  // 미리 계산해서 숨은 이름이 다 들어가는 자리를 찾고, 그 자리로 부드럽게 옮김
+  function settleHidden() {
+    if (!growHidden()) return false;
+    const start = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    for (let round = 0; round < 4; round++) {
+      alpha = 0.3;
+      for (let i = 0; i < 60; i++) tick();
+      separate(30);
+      placeLabels();
+      if (!growHidden()) break;
+    }
+    alpha = 0;
+    const targets = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    for (const [n, p] of start) { n.x = p.x; n.y = p.y; }
+    animateTo(targets, 700, autoFit && !gest ? fitTargetFor(targets, null) : null);
+    return true;
+  }
   function placeLabels() {
     const boxes = [...nodes.values()].map((n) => ({ x0: n.x - n.bw / 2 - 2, x1: n.x + n.bw / 2 + 2, y0: n.y - NODE_R - 2, y1: n.y - NODE_R + n.bh }));
     const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
@@ -571,7 +605,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       const a = nodes.get(e.from); const b = nodes.get(e.to);
       const dx = b.x - a.x; const dy = b.y - a.y;
       const d = Math.hypot(dx, dy) || 1;
-      const f = (d - K) * GP.spring * alpha;
+      // 관계 이름이 두 원 사이에 들어갈 만큼은 선을 늘림
+      const rest = e._lg ? Math.max(K, needLen(e, a, b)) : K;
+      const f = (d - rest) * GP.spring * alpha;
       a.vx += (dx / d) * f; a.vy += (dy / d) * f;
       b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
     }
@@ -583,6 +619,18 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       const sp = Math.hypot(n.vx, n.vy);
       if (sp > 30) { n.vx *= 30 / sp; n.vy *= 30 / sp; }
       n.x += n.vx; n.y += n.vy;
+    }
+    // 관계 이름이 들어갈 최소 길이는 힘이 아니라 '자리'로 보장 (가운데로 당기는 힘에 눌려 짧아지지 않게)
+    for (const e of edges) {
+      if (!e._lg) continue;
+      const a = nodes.get(e.from); const b = nodes.get(e.to);
+      const dx = b.x - a.x; const dy = b.y - a.y; const d = Math.hypot(dx, dy) || 1;
+      const need = needLen(e, a, b);
+      if (d >= need) continue;
+      const m = (need - d) * 0.2;
+      const ux = dx / d; const uy = dy / d;
+      if (!a.fixed) { a.x -= ux * m * (b.fixed ? 2 : 1); a.y -= uy * m * (b.fixed ? 2 : 1); }
+      if (!b.fixed) { b.x += ux * m * (a.fixed ? 2 : 1); b.y += uy * m * (a.fixed ? 2 : 1); }
     }
     alpha *= 0.985;
   }
@@ -692,7 +740,12 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       tick();
       draw();
       if (alpha > 0.02) raf = requestAnimationFrame(loop);
-      else { raf = 0; placeLabels(); draw(); if (autoFit && !gest) fit(true); } // 멈추면 관계 이름 자리 다시 잡기 (+ 전체 보기 상태면 다시 맞춤)
+      else {
+        raf = 0; placeLabels(); draw();
+        // 숨은 관계 이름이 있으면 그 선을 조금 늘려서 한 번 더 (부드럽게)
+        if (!focus && settleHidden()) return;
+        if (autoFit && !gest) fit(true);
+      } // 멈추면 관계 이름 자리 다시 잡기 (+ 전체 보기 상태면 다시 맞춤)
     };
     raf = requestAnimationFrame(loop);
   }
