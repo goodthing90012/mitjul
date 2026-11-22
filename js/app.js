@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -548,7 +548,7 @@ function renderPeople() {
   state.graphMax = maxP;
   const page = Math.min(state.graphPage, maxP);
   const body = $('#tabBody');
-  const tools = `<div class="people-tools"><button class="chip" id="ptText" type="button">✍ 문장으로 적기</button><button class="chip" id="ptJson" type="button">📥 JSON 가져오기</button></div>`;
+  const tools = `<div class="people-tools"><button class="chip" id="ptText" type="button">✍ 문장으로 적기</button><button class="chip" id="ptJson" type="button">🤖 AI로 한번에</button></div>`;
   const bindTools = () => { $('#ptText').onclick = () => textPeopleSheet(); $('#ptJson').onclick = () => jsonPeopleSheet(); };
   if (!people.length) {
     body.innerHTML = `${tools}<div class="empty">외국 소설처럼 이름·애칭·호칭·결혼 후 성이 헷갈릴 때<br><b>＋ 인물</b>로 한 사람의 여러 이름을 묶어두세요.<br><small>"엘리자베스와 제인은 자매"처럼 <b>문장으로 적기</b>가 제일 빨라요.</small></div>`;
@@ -902,12 +902,12 @@ ${upto ? `나는 p.${upto}까지 읽었으니, 그 뒤에 드러나는 정보(�
 
 ${JSON.stringify(JSON_EXAMPLE, null, 2)}`;
   const body = openSheet(`
-    <h3>📥 JSON 가져오기</h3>
-    <p class="hint">ChatGPT·Claude 같은 AI에게 등장인물 정리를 부탁하고, 받은 JSON을 붙여넣거나 파일로 올리세요. 이미 있는 인물은 이름으로 찾아 합쳐요.</p>
-    <button class="ghost wide" id="pjPrompt" type="button">📋 AI에게 보낼 요청문 복사${upto ? ` (p.${upto}까지만)` : ''}</button>
+    <h3>🤖 AI로 한번에 정리</h3>
+    <p class="hint"><b>① 요청문 복사</b> → <b>② ChatGPT·Claude 같은 AI에 붙여넣기</b> → <b>③ AI가 준 답을 아래에 그대로 붙여넣기</b>. 등장인물과 관계가 한 번에 들어가요. 이미 있는 인물은 이름으로 찾아 합쳐요.</p>
+    <button class="ghost wide" id="pjPrompt" type="button">① 📋 AI에게 보낼 요청문 복사${upto ? ` (p.${upto}까지만)` : ''}</button>
     <p class="hint small">⚠ AI는 결말까지 알고 있어서 스포일러가 섞일 수 있고, 번역본마다 이름 표기가 다를 수 있어요. 넣기 전에 아래 미리보기를 확인하세요.</p>
-    <textarea id="pjIn" rows="7" placeholder='{"people": [...], "relations": [...]}'></textarea>
-    <label class="ghost wide">파일에서 불러오기<input type="file" accept=".json,application/json,text/plain" id="pjFile" hidden></label>
+    <textarea id="pjIn" rows="7" placeholder='③ AI가 준 답을 여기에 붙여넣기'></textarea>
+    <label class="ghost wide">파일로 불러오기 <small>(.json)</small><input type="file" accept=".json,application/json,text/plain" id="pjFile" hidden></label>
     <div id="pjPrev" class="pt-prev"></div>
     <div class="btn-row"><button class="primary" id="pjApply" disabled>이대로 넣기</button></div>`, { full: true });
   const ta = $('#pjIn', body);
@@ -920,7 +920,7 @@ ${JSON.stringify(JSON_EXAMPLE, null, 2)}`;
       const jsonText = raw.slice(raw.search(/[[{]/), Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']')) + 1); // 앞뒤 설명·코드블록 표시 무시
       plan = jsonToPlan(JSON.parse(jsonText));
     } catch {
-      $('#pjPrev', body).innerHTML = '<div class="pp bad"><b>JSON 모양이 아니에요</b><small>중괄호 { } 로 시작하는 부분 전체를 붙여넣어 주세요</small></div>';
+      $('#pjPrev', body).innerHTML = '<div class="pp bad"><b>AI 답을 알아보지 못했어요</b><small>AI 답에서 { 로 시작해 } 로 끝나는 부분 전체를 붙여넣어 주세요</small></div>';
       $('#pjApply', body).disabled = true;
       return;
     }
