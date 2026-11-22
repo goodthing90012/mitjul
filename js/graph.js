@@ -210,6 +210,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   }
   function setFocus(id) {
     if (id === focus) return;
+    stopInertia(); commitGesture(); // 톡 직후 남은 이동 상태를 먼저 정리
     if (!id) {
       focus = null;
       styleFocus();
