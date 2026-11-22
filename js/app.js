@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -453,7 +453,7 @@ function renderPanel() {
   };
   $('#bpSetPages') && ($('#bpSetPages').onclick = () => editBookSheet());
   $('#bpEdit').onclick = () => editBookSheet();
-  $$('.tabs button').forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; renderPanel(); }));
+  $$('.tabs button').forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; state.selMode = null; renderPanel(); }));
   $$('.pb-dot').forEach((d) => (d.onclick = () => { if (state.tab !== 'quotes') { state.tab = 'quotes'; renderPanel(); } focusQuote(d.dataset.q); }));
   if (state.tab === 'quotes') {
     $('#addQuote').onclick = () => quoteSheet();
@@ -519,10 +519,10 @@ function findPeople(query, page) {
   return out;
 }
 
-function personCard(p, page, hit) {
+function personCard(p, page, hit, checked) {
   const al = visibleAliases(p, page);
   const married = marriedVisible(p, page);
-  return `<div class="pcard" data-pid="${p.id}">
+  return `<div class="pcard ${checked ? 'picked' : ''}" data-pid="${p.id}">${checked !== undefined ? `<span class="ck ${checked ? 'on' : ''}"></span>` : ''}
     <div class="pc-dot" style="background:${familyColor(p.family)};${married ? `box-shadow:0 0 0 3px ${familyColor(p.marriedFamily)}` : ''}"></div>
     <div class="pc-main">
       <div class="pc-name">${esc(p.name)} ${p.family ? `<span class="fam" style="--fc:${familyColor(p.family)}">${esc(p.family)}</span>` : ''}${married ? ` → <span class="fam" style="--fc:${familyColor(p.marriedFamily)}">${esc(p.marriedFamily)}</span>` : ''}</div>
@@ -556,6 +556,8 @@ function renderPeople() {
     return;
   }
   const fams = [...new Set(people.flatMap((p) => [p.family, p.marriedFamily]).filter(Boolean))];
+  const sel = state.selMode;
+  if (!state.sel) state.sel = new Set();
   body.innerHTML = `
     ${tools}
     <div class="finder">
@@ -563,7 +565,7 @@ function renderPeople() {
       <div id="findOut"></div>
     </div>
     <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
-    <p class="graph-tip">인물을 <b>길게 눌러 다른 인물로 끌면</b> 이어져요 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 짧게 끌면 자리 옮기기</p>
+    <p class="graph-tip"><b>톡</b> = 그 인물 관계만 보기 · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
       <input type="range" id="pageSlider" min="0" max="${maxP}" value="${page}">
@@ -573,15 +575,16 @@ function renderPeople() {
       ${Object.values(REL_KINDS).map((k) => `<span><i class="ln" style="border-color:${k.color};border-top-style:${k.dash ? 'dashed' : 'solid'}"></i>${k.label}</span>`).join('')}
       <span><i class="ring"></i>테두리 = 결혼 후 가문</span>
     </div>
-    <h4 class="sec">인물</h4>
-    <div class="people">${people.filter((p) => (p.firstPage || 0) <= page).map((p) => personCard(p, page)).join('') || '<div class="empty small">이 쪽까지 나온 인물이 없어요</div>'}</div>
-    <h4 class="sec">관계</h4>
-    <div class="rels">${relations.filter((r) => (r.page || 0) <= page).sort((a, b) => (a.page || 0) - (b.page || 0)).map((r) => {
+    <h4 class="sec">인물 ${sel === 'people' ? `<small>전체 ${people.length}명 · 쪽수와 상관없이 모두 보여요</small>` : ''}${!sel ? '<button class="link sec-act" id="selPeople" type="button">선택 삭제</button>' : ''}</h4>
+    <div class="people ${sel === 'people' ? 'selecting' : ''}">${(sel === 'people' ? people : people.filter((p) => (p.firstPage || 0) <= page)).map((p) => personCard(p, page, null, sel === 'people' ? state.sel.has(p.id) : undefined)).join('') || '<div class="empty small">이 쪽까지 나온 인물이 없어요</div>'}</div>
+    ${sel === 'people' ? '' : `<h4 class="sec">관계 ${sel === 'rels' ? `<small>전체 ${relations.length}개</small>` : ''}${!sel && relations.length ? '<button class="link sec-act" id="selRels" type="button">선택 삭제</button>' : ''}</h4>
+    <div class="rels ${sel === 'rels' ? 'selecting' : ''}">${(sel === 'rels' ? relations : relations.filter((r) => (r.page || 0) <= page)).slice().sort((a, b) => (a.page || 0) - (b.page || 0)).map((r) => {
       const a = people.find((p) => p.id === r.from); const b = people.find((p) => p.id === r.to);
       if (!a || !b) return '';
       const k = REL_KINDS[r.kind] || REL_KINDS.etc;
-      return `<button class="rel" data-rid="${r.id}"><span class="rk" style="--rc:${k.color}">${k.label}</span>${esc(a.name)} — ${esc(b.name)}${r.label ? ` <em>${esc(r.label)}</em>` : ''}${r.page ? ` <small>p.${r.page}</small>` : ''}</button>`;
-    }).join('') || '<div class="empty small">아직 관계가 없어요</div>'}</div>`;
+      const chk = sel === 'rels' ? `<span class="ck ${state.sel.has(r.id) ? 'on' : ''}"></span>` : '';
+      return `<button class="rel ${sel === 'rels' && state.sel.has(r.id) ? 'picked' : ''}" data-rid="${r.id}">${chk}<span class="rk" style="--rc:${k.color}">${k.label}</span>${esc(a.name)} — ${esc(b.name)}${r.label ? ` <em>${esc(r.label)}</em>` : ''}${r.page ? ` <small>p.${r.page}</small>` : ''}</button>`;
+    }).join('') || '<div class="empty small">아직 관계가 없어요</div>'}</div>`}`;
 
   state.graph?.destroy();
   bindTools();
@@ -604,8 +607,54 @@ function renderPeople() {
       : '';
     $$('#findOut .pcard').forEach((c) => (c.onclick = () => personSheet(people.find((p) => p.id === c.dataset.pid))));
   };
+  if (sel) {
+    // 선택 모드: 카드 누르면 체크, 아래 버튼으로 삭제
+    const toggle = (id) => { state.sel.has(id) ? state.sel.delete(id) : state.sel.add(id); renderPeople(); };
+    $$('.people .pcard').forEach((c) => (c.onclick = () => toggle(c.dataset.pid)));
+    $$('.rel').forEach((b) => (b.onclick = () => toggle(b.dataset.rid)));
+    renderSelBar();
+    return;
+  }
+  $('#selPeople') && ($('#selPeople').onclick = () => startSelect('people'));
+  $('#selRels') && ($('#selRels').onclick = () => startSelect('rels'));
   $$('.people .pcard').forEach((c) => (c.onclick = () => personSheet(people.find((p) => p.id === c.dataset.pid))));
   $$('.rel').forEach((b) => (b.onclick = () => relationSheet(relations.find((r) => r.id === b.dataset.rid))));
+}
+
+/* ---------- 인물·관계 선택 삭제 / 전체 삭제 ---------- */
+function startSelect(mode) {
+  state.selMode = mode;
+  state.sel = new Set();
+  renderPeople();
+  const target = $(mode === 'people' ? '.people' : '.rels');
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function endSelect() {
+  state.selMode = null;
+  state.sel = new Set();
+  renderPanel();
+}
+function renderSelBar() {
+  const { people, relations } = state.current;
+  const mode = state.selMode;
+  const all = mode === 'people' ? people.map((p) => p.id) : relations.map((r) => r.id);
+  const n = state.sel.size;
+  const allOn = n === all.length && n > 0;
+  $('#bpActions').innerHTML = `<button class="ghost" id="selAll">${allOn ? '모두 해제' : '모두 선택'}</button><button class="primary danger-fill" id="selDel" ${n ? '' : 'disabled'}>${n ? `${n}개 삭제` : '골라주세요'}</button><button class="ghost" id="selCancel">취소</button>`;
+  $('#selAll').onclick = () => { state.sel = allOn ? new Set() : new Set(all); renderPeople(); };
+  $('#selCancel').onclick = endSelect;
+  $('#selDel').onclick = async () => {
+    const what = mode === 'people' ? '인물' : '관계';
+    const extra = mode === 'people' ? '\n이 인물들이 들어간 관계도 함께 지워져요.' : '';
+    if (!confirm(`${allOn ? `${what} 전체(` : ''}${n}개${allOn ? ')' : ''}를 지울까요?${extra}`)) return;
+    const bookId = state.current.book.id;
+    if (mode === 'people') for (const id of state.sel) await db.deletePerson(id, bookId);
+    else for (const id of state.sel) await db.del('relations', id);
+    state.selMode = null;
+    state.sel = new Set();
+    await afterChange();
+    toast(`${what} ${n}개를 지웠어요`);
+  };
 }
 
 // 관계도 전체 화면: 화면 스크롤과 겹치지 않게 넓게 보고 정리
@@ -614,14 +663,16 @@ function graphSheet(maxP) {
   let g = null;
   const body = openSheet(`
     <h3>인물 관계도</h3>
-    <div class="graph-box big"><svg id="graphBig"></svg></div>
+    <div class="graph-box big"><svg id="graphBig"></svg><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div>
+    <p class="graph-tip">두 손가락으로 확대 · 빈 곳을 끌어 이동 · 톡 = 관계 보기, 한 번 더 = 편집 · 길게 눌러 끌기 = 잇기</p>
     <div class="slider">
       <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>
       <input type="range" id="bigSlider" min="0" max="${maxP}" value="${state.graphPage}">
     </div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
   requestAnimationFrame(() => {
-    g = createGraph($('#graphBig', body), graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage)));
+    g = createGraph($('#graphBig', body), { ...graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage)), zoomable: true });
     g.setData(people, relations, state.graphPage);
+    $('#graphFit', body).onclick = () => g.fit();
   });
   const sl = $('#bigSlider', body);
   sl.oninput = () => {

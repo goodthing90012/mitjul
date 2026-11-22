@@ -37,43 +37,57 @@ const el = (tag, attrs = {}, parent) => {
   return e;
 };
 
-export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
+// 관계도
+// - 인물 수와 화면 크기에 맞춰 간격을 정하고, 이름표끼리 겹치지 않게 밀어냄
+// - 같은 가문끼리는 살짝 모이게
+// - 처음엔 계산을 미리 돌려서 정리된 모습으로 보여주고, 전체가 화면에 들어오게 맞춤
+// - 톡 = 그 인물의 관계만 강조(관계 이름 표시), 한 번 더 톡 = 편집
+// - zoomable이면 빈 곳 끌기 = 이동, 두 손가락 = 확대/축소
+const GP = { rep: 0.02, grav: 0.06, spring: 0.05, kmin: 60, kmax: 150, kf: 0.7 }; // 간격·끌어당김 세기
+export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
   let raf = 0;
-  const gEdges = el('g', {}, svg);
-  const gNodes = el('g', {}, svg);
-  const gLabels = el('g', {}, svg);
-  const gTemp = el('g', { 'pointer-events': 'none' }, svg);
+  let focus = null;
+  let view = { k: 1, x: 0, y: 0 };
+  let K = 120; // 이상적인 간격
+  const NODE_R = 20;
+  const gView = el('g', {}, svg);
+  const gEdges = el('g', {}, gView);
+  const gNodes = el('g', {}, gView);
+  const gLabels = el('g', {}, gView);
+  const gTemp = el('g', { 'pointer-events': 'none' }, gView);
   const tempLine = el('line', { stroke: '#c8553d', 'stroke-width': 3, 'stroke-dasharray': '6 5', 'stroke-linecap': 'round', visibility: 'hidden' }, gTemp);
   const tempRing = el('circle', { r: 27, fill: 'none', stroke: '#c8553d', 'stroke-width': 3, visibility: 'hidden' }, gTemp);
-
-  // 빈 곳 두 번 톡 → 인물 추가
-  let lastTap = null;
-  svg.addEventListener('pointerup', (e) => {
-    if (e.target.closest && e.target.closest('.gnode')) return;
-    const now = performance.now();
-    const pt = toLocal(e);
-    if (lastTap && now - lastTap.t < 350 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
-      lastTap = null;
-      onEmptyDoubleTap?.();
-    } else lastTap = { t: now, ...pt };
-  });
-  const size = () => ({ w: svg.clientWidth || 360, h: svg.clientHeight || 340 });
+  const size = () => ({ w: svg.clientWidth || 360, h: svg.clientHeight || 300 });
+  const applyView = () => gView.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
+  const toLocal = (e) => {
+    const r = svg.getBoundingClientRect();
+    return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
+  };
 
   function setData(people, relations, page) {
     const { w, h } = size();
-    const next = new Map();
     const vis = people.filter((p) => (p.firstPage || 0) <= page);
+    const n = Math.max(vis.length, 1);
+    K = Math.max(GP.kmin, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
+    const next = new Map();
+    let fresh = 0;
+    // 새 인물은 같은 가문 사람 근처, 없으면 원형으로 배치
     vis.forEach((p, i) => {
       const old = nodes.get(p.id);
-      const ang = (i / Math.max(vis.length, 1)) * Math.PI * 2;
-      next.set(p.id, old ? Object.assign(old, { p }) : {
-        p, x: w / 2 + Math.cos(ang) * 90, y: h / 2 + Math.sin(ang) * 90, vx: 0, vy: 0,
-      });
+      if (old) { next.set(p.id, Object.assign(old, { p })); return; }
+      fresh++;
+      const kin = [...nodes.values()].find((m) => m.p.family && m.p.family === p.family);
+      const ang = (i / n) * Math.PI * 2;
+      const R = K * Math.sqrt(n) * 0.45;
+      next.set(p.id, kin
+        ? { p, x: kin.x + (Math.random() - 0.5) * K, y: kin.y + (Math.random() - 0.5) * K, vx: 0, vy: 0 }
+        : { p, x: w / 2 + Math.cos(ang) * R, y: h / 2 + Math.sin(ang) * R, vx: 0, vy: 0 });
     });
     nodes = next;
+    if (focus && !nodes.has(focus)) focus = null;
     const byPair = new Map();
     relations
       .filter((r) => (r.page || 0) <= page && nodes.has(r.from) && nodes.has(r.to))
@@ -84,7 +98,15 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
       });
     edges = [...byPair.values()];
     build(page);
-    alpha = 1;
+    // 새로 생긴 게 많으면 미리 계산해서 정돈된 상태로 보여줌
+    if (fresh) {
+      alpha = 1;
+      for (let i = 0; i < 320; i++) tick();
+      separate(80);
+      fit(false);
+    }
+    alpha = fresh ? 0.04 : Math.max(alpha, 0.25);
+    draw();
     kick();
   }
 
@@ -95,6 +117,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
     for (const e of edges) {
       const k = REL_KINDS[e.kind] || REL_KINDS.etc;
       e._line = el('line', { stroke: k.color, 'stroke-width': e.kind === 'family' || e.kind === 'love' ? 2.6 : 1.8, 'stroke-dasharray': k.dash }, gEdges);
+      e._lg = null;
       if (e.label) {
         e._lg = el('g', { 'pointer-events': 'none' }, gLabels);
         e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
@@ -106,24 +129,48 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
       const p = n.p;
       const g = el('g', { class: 'gnode' }, gNodes);
       const married = marriedVisible(p, page);
-      el('circle', { r: 30, fill: 'transparent' }, g); // 손가락으로 잡기 쉬운 영역
-      el('circle', { r: 20, fill: familyColor(p.family), stroke: married ? familyColor(p.marriedFamily) : '#fffaf0', 'stroke-width': married ? 5 : 2 }, g);
+      el('circle', { r: 30, fill: 'transparent' }, g);
+      el('circle', { r: NODE_R, fill: familyColor(p.family), stroke: married ? familyColor(p.marriedFamily) : '#fffaf0', 'stroke-width': married ? 5 : 2 }, g);
       const ini = el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', 'font-size': 14, 'font-weight': 700 }, g);
       ini.textContent = [...(p.name || '?')][0];
       const name = el('text', { y: 36, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 700, fill: '#2b2622', class: 'halo' }, g);
       name.textContent = p.name;
       const al = visibleAliases(p, page).map((a) => a.name).filter((x) => x !== p.name);
+      let aliasT = null;
       if (al.length) {
-        const t = el('text', { y: 51, 'text-anchor': 'middle', 'font-size': 10.5, fill: '#6b5f55', class: 'halo' }, g);
-        t.textContent = al.slice(0, 3).join(' · ') + (al.length > 3 ? ` +${al.length - 3}` : '');
+        aliasT = el('text', { y: 51, 'text-anchor': 'middle', 'font-size': 10.5, fill: '#6b5f55', class: 'halo' }, g);
+        aliasT.textContent = al.slice(0, 2).join(' · ') + (al.length > 2 ? ` +${al.length - 2}` : '');
       }
+      // 이름표 크기 (겹침 방지용)
+      const tw = Math.max(name.getComputedTextLength?.() || p.name.length * 13, aliasT?.getComputedTextLength?.() || 0);
+      n.bw = Math.max(46, tw + 10);
+      n.bh = aliasT ? 72 : 58;
       n._g = g;
-      bindDrag(n);
+      bindNode(n);
     }
-    draw();
+    styleFocus();
   }
 
-  // 짧게 끌면 자리 옮기기, 길게 누른 뒤 끌면 다른 인물과 잇기
+  // 강조: 고른 인물과 이어진 것만 진하게, 관계 이름은 많을 땐 강조된 것만
+  function styleFocus() {
+    const many = edges.length > 8;
+    const near = new Set();
+    if (focus) {
+      near.add(focus);
+      for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
+    }
+    for (const e of edges) {
+      const on = !focus || e.from === focus || e.to === focus;
+      e._line.setAttribute('opacity', on ? 1 : 0.12);
+      if (e._lg) e._lg.setAttribute('visibility', (focus ? on : !many) ? 'visible' : 'hidden');
+    }
+    for (const n of nodes.values()) {
+      n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.28);
+      n._g.classList.toggle('focused', n.p.id === focus);
+    }
+  }
+
+  /* ---- 노드 조작: 톡 = 강조/편집, 짧게 끌기 = 옮기기, 길게 눌러 끌기 = 잇기 ---- */
   function nodeAt(pt, except) {
     let best = null; let bd = 34;
     for (const m of nodes.values()) {
@@ -133,7 +180,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
     }
     return best;
   }
-  function bindDrag(n) {
+  function bindNode(n) {
     let start = null;
     let moved = 0;
     let timer = 0;
@@ -153,9 +200,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
       n._g.setPointerCapture(e.pointerId);
       const pt = toLocal(e);
       start = { dx: n.x - pt.x, dy: n.y - pt.y, x: pt.x, y: pt.y };
-      moved = 0;
-      linking = false;
-      target = null;
+      moved = 0; linking = false; target = null;
       n.fixed = true;
       clearTimeout(timer);
       if (onLink) {
@@ -174,15 +219,16 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
       if (linking) { showTemp(pt); return; }
       const nx = pt.x + start.dx;
       const ny = pt.y + start.dy;
-      moved += Math.abs(nx - n.x) + Math.abs(ny - n.y);
-      if (moved < 6) return; // 손떨림은 무시 (길게 누르기 판단용)
+      moved += (Math.abs(nx - n.x) + Math.abs(ny - n.y)) * view.k;
+      if (moved < 6) return;
       clearTimeout(timer);
       n.x = nx; n.y = ny;
-      alpha = Math.max(alpha, 0.3);
+      alpha = Math.max(alpha, 0.25);
       kick();
     });
-    const up = () => {
+    const up = (e) => {
       if (!start) return;
+      e?.stopPropagation?.();
       clearTimeout(timer);
       start = null;
       n.fixed = false;
@@ -193,49 +239,183 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
         if (target) onLink?.(n.p, target.p);
         return;
       }
-      if (moved < 6) onNodeTap?.(n.p);
+      if (moved < 6) {
+        if (focus === n.p.id) onNodeTap?.(n.p);
+        else { focus = n.p.id; styleFocus(); }
+      }
     };
     n._g.addEventListener('pointerup', up);
     n._g.addEventListener('pointercancel', () => { clearTimeout(timer); start = null; n.fixed = false; linking = false; hideTemp(); n._g.classList.remove('linking'); });
   }
 
-  function toLocal(e) {
-    const r = svg.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  /* ---- 빈 곳: 톡 = 강조 풀기, 두 번 톡 = 인물 추가, (zoomable) 끌기 = 이동, 두 손가락 = 확대 ---- */
+  const pts = new Map();
+  let pan = null;
+  let pinch = null;
+  let lastTap = null;
+  let bgMoved = 0;
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.target.closest?.('.gnode')) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    bgMoved = 0;
+    if (!zoomable) return;
+    svg.setPointerCapture(e.pointerId);
+    if (pts.size === 1) pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      const r = svg.getBoundingClientRect();
+      const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: view.k, wx: (mx - view.x) / view.k, wy: (my - view.y) / view.k };
+      pan = null;
+    }
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    bgMoved += Math.abs(e.clientX - prev.x) + Math.abs(e.clientY - prev.y);
+    if (!zoomable) return;
+    if (pinch && pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      const r = svg.getBoundingClientRect();
+      const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
+      view.k = Math.max(0.35, Math.min(3, pinch.k * (Math.hypot(a.x - b.x, a.y - b.y) / Math.max(pinch.d, 1))));
+      view.x = mx - pinch.wx * view.k; view.y = my - pinch.wy * view.k;
+      applyView();
+    } else if (pan) {
+      view.x = pan.vx + (e.clientX - pan.x); view.y = pan.vy + (e.clientY - pan.y);
+      applyView();
+    }
+  });
+  const bgUp = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size === 0) pan = null;
+    if (bgMoved > 8) return;
+    const now = performance.now();
+    const pt = { x: e.clientX, y: e.clientY };
+    if (lastTap && now - lastTap.t < 350 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
+      lastTap = null;
+      onEmptyDoubleTap?.();
+    } else {
+      lastTap = { t: now, ...pt };
+      if (focus) { focus = null; styleFocus(); }
+    }
+  };
+  svg.addEventListener('pointerup', bgUp);
+  svg.addEventListener('pointercancel', (e) => { pts.delete(e.pointerId); pan = null; pinch = null; });
+  if (zoomable) {
+    svg.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const r = svg.getBoundingClientRect();
+      const mx = e.clientX - r.left; const my = e.clientY - r.top;
+      const wx = (mx - view.x) / view.k; const wy = (my - view.y) / view.k;
+      view.k = Math.max(0.35, Math.min(3, view.k * Math.exp(-e.deltaY * 0.0015)));
+      view.x = mx - wx * view.k; view.y = my - wy * view.k;
+      applyView();
+    }, { passive: false });
   }
 
+  /* ---- 배치 계산 ---- */
   function tick() {
     const { w, h } = size();
     const arr = [...nodes.values()];
+    const cx = w / 2; const cy = h / 2;
     for (let i = 0; i < arr.length; i++) {
+      const a = arr[i];
       for (let j = i + 1; j < arr.length; j++) {
-        const a = arr[i]; const b = arr[j];
+        const b = arr[j];
         let dx = b.x - a.x; let dy = b.y - a.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { dx = Math.random(); dy = Math.random(); d2 = 1; }
-        const f = (5200 / d2) * alpha;
-        const d = Math.sqrt(d2);
-        a.vx -= (dx / d) * f; a.vy -= (dy / d) * f;
-        b.vx += (dx / d) * f; b.vy += (dy / d) * f;
+        let d = Math.hypot(dx, dy);
+        if (d < 0.5) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d = 0.5; }
+        // 밀어내기
+        const rep = ((K * K) / d) * GP.rep * alpha;
+        a.vx -= (dx / d) * rep; a.vy -= (dy / d) * rep;
+        b.vx += (dx / d) * rep; b.vy += (dy / d) * rep;
+        // 같은 가문은 살짝 당기기
+        if (a.p.family && a.p.family === b.p.family && d > K * 0.9) {
+          const f = (d - K * 0.9) * 0.008 * alpha;
+          a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+          b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+        }
+        // 이름표 겹침 막기 (사각형 겹침을 직접 밀어냄)
+        const ox = (a.bw + b.bw) / 2 + 6 - Math.abs(dx);
+        const oy = (a.bh + b.bh) / 2 - Math.abs(dy);
+        if (ox > 0 && oy > 0) {
+          if (ox / (a.bw + b.bw) < oy / (a.bh + b.bh)) {
+            const s = (dx >= 0 ? 1 : -1) * ox * 0.5;
+            if (!a.fixed) a.x -= s; if (!b.fixed) b.x += s;
+          } else {
+            const s = (dy >= 0 ? 1 : -1) * oy * 0.5;
+            if (!a.fixed) a.y -= s; if (!b.fixed) b.y += s;
+          }
+        }
       }
     }
     for (const e of edges) {
       const a = nodes.get(e.from); const b = nodes.get(e.to);
       const dx = b.x - a.x; const dy = b.y - a.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      const f = (d - 120) * 0.035 * alpha;
+      const d = Math.hypot(dx, dy) || 1;
+      const f = (d - K) * GP.spring * alpha;
       a.vx += (dx / d) * f; a.vy += (dy / d) * f;
       b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
     }
     for (const n of arr) {
-      n.vx += (w / 2 - n.x) * 0.012 * alpha;
-      n.vy += (h / 2 - n.y) * 0.012 * alpha;
+      n.vx += (cx - n.x) * GP.grav * alpha;
+      n.vy += (cy - n.y) * GP.grav * alpha;
       if (n.fixed) { n.vx = 0; n.vy = 0; continue; }
-      n.vx *= 0.82; n.vy *= 0.82;
-      n.x = Math.max(30, Math.min(w - 30, n.x + n.vx));
-      n.y = Math.max(26, Math.min(h - 56, n.y + n.vy));
+      n.vx *= 0.6; n.vy *= 0.6;
+      const sp = Math.hypot(n.vx, n.vy);
+      if (sp > 30) { n.vx *= 30 / sp; n.vy *= 30 / sp; }
+      n.x += n.vx; n.y += n.vy;
     }
-    alpha *= 0.975;
+    alpha *= 0.985;
+  }
+
+  // 이름표가 겹친 곳만 반복해서 떼어놓기 (배치 계산 끝에 한 번)
+  function separate(iter) {
+    const arr = [...nodes.values()];
+    for (let t = 0; t < iter; t++) {
+      let any = false;
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          const a = arr[i]; const b = arr[j];
+          const dx = b.x - a.x; const dy = b.y - a.y;
+          const ox = (a.bw + b.bw) / 2 + 8 - Math.abs(dx);
+          const oy = (a.bh + b.bh) / 2 + 4 - Math.abs(dy);
+          if (ox <= 0 || oy <= 0) continue;
+          any = true;
+          if (ox / (a.bw + b.bw) < oy / (a.bh + b.bh)) { const s2 = ((dx >= 0 ? 1 : -1) * ox) / 2; a.x -= s2; b.x += s2; }
+          else { const s2 = ((dy >= 0 ? 1 : -1) * oy) / 2; a.y -= s2; b.y += s2; }
+        }
+      }
+      if (!any) break;
+    }
+  }
+
+  // 전체가 화면에 들어오게 (인라인은 축소만, 크게 보기는 확대도)
+  function fit(animate = true) {
+    if (!nodes.size) return;
+    const { w, h } = size();
+    let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+    for (const n of nodes.values()) {
+      x0 = Math.min(x0, n.x - n.bw / 2); x1 = Math.max(x1, n.x + n.bw / 2);
+      y0 = Math.min(y0, n.y - NODE_R - 4); y1 = Math.max(y1, n.y + n.bh - NODE_R);
+    }
+    const pad = 14;
+    const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
+    const target = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
+    if (!animate) { view = target; applyView(); return; }
+    const from = { ...view }; const t0 = performance.now();
+    const step = () => {
+      const p = Math.min(1, (performance.now() - t0) / 300);
+      const e = 1 - Math.pow(1 - p, 3);
+      view = { k: from.k + (target.k - from.k) * e, x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e };
+      applyView();
+      if (p < 1) requestAnimationFrame(step);
+    };
+    step();
   }
 
   function draw() {
@@ -245,7 +425,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
       e._line.setAttribute('x2', b.x); e._line.setAttribute('y2', b.y);
       if (e._lg) {
         const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2;
-        const tw = e._tx.getComputedTextLength?.() || e.label.length * 11;
+        const tw = e._tw || (e._tw = e._tx.getComputedTextLength?.() || e.label.length * 11);
         e._tx.setAttribute('x', mx); e._tx.setAttribute('y', my);
         e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - 9);
         e._bg.setAttribute('width', tw + 12); e._bg.setAttribute('height', 18);
@@ -265,5 +445,10 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap } = {}) {
     raf = requestAnimationFrame(loop);
   }
 
-  return { setData, destroy: () => { cancelAnimationFrame(raf); svg.textContent = ''; } };
+  applyView();
+  return {
+    setData,
+    fit: () => fit(true),
+    destroy: () => { cancelAnimationFrame(raf); svg.textContent = ''; },
+  };
 }
