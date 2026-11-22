@@ -476,3 +476,10 @@ details.spoil summary { cursor: pointer; font-size: 13px; font-weight: 700; colo
 .spoil-blur > em { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12px; font-weight: 700; color: var(--accent); }
 .spoil-blur.open > span, .spoil-blur.open > textarea { filter: none; user-select: auto; pointer-events: auto; }
 .spoil-blur.open > em { display: none; }
+.spoil-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; margin-top: 8px; border-radius: 18px; border: 1px dashed var(--accent); background: #fbeee3; color: var(--accent); font-size: 13px; font-weight: 700; }
+.spoil-chip small { font-weight: 400; color: #b07a68; }
+.spoil-chip.wide { width: 100%; justify-content: center; margin: 0 0 12px; min-height: 44px; }
+textarea.desc-area { display: block; width: 100%; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper2); font-size: 16px; margin-bottom: 12px; }
+textarea.desc-area[hidden] { display: none; }
+.hb-sub { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.hidden-box .hrel .mini { flex: none; }

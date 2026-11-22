@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -219,8 +219,25 @@ async function revealPerson(id) {
   // 결혼 후 이름처럼 뒤에 드러나는 이름은 계속 가려둠
   p.aliases = (p.aliases || []).map((a) => (a.hidden && a.kind !== '결혼 후 이름' ? { ...a, hidden: false } : a));
   await db.put('people', p);
+  // 이미 만난 사람과의 관계 중, 이 인물이 나오는 장(또는 지금 장)까지 드러난 단계만 같이 열기
+  const upto = Math.max(state.current.book.chapter || 0, raw.chapter || 0);
+  const met = new Set([...state.current.people.map((x) => x.id), p.id]);
+  let n = 0;
+  for (const r of state.current.allRelations) {
+    if (!r.hidden || (r.from !== p.id && r.to !== p.id)) continue;
+    if (!met.has(r.from) || !met.has(r.to)) continue;
+    if (!r.chapter || r.chapter > upto) continue;
+    await db.put('relations', { ...r, hidden: false }); n++;
+  }
   await afterChange();
-  toast(`${p.name}을(를) 열었어요`);
+  toast(`${p.name}을(를) 열었어요${n ? ` · 관계 ${n}개도 함께` : ''}`);
+}
+// AI 설명 가림 풀기: 한 번 보면 계속 보이게 저장
+async function unspoilDesc(id) {
+  const raw = state.current.allPeople.find((x) => x.id === id);
+  if (!raw) return;
+  await db.put('people', { ...raw, descSpoiler: false });
+  await afterChange();
 }
 async function revealRelation(id) {
   const raw = state.current.allRelations.find((x) => x.id === id);
@@ -595,7 +612,7 @@ function personCard(p, page, hit, checked) {
       <div class="pc-name">${esc(p.name)} ${p.family ? `<span class="fam" style="--fc:${familyColor(p.family)}">${esc(p.family)}</span>` : ''}${married ? ` → <span class="fam" style="--fc:${familyColor(p.marriedFamily)}">${esc(p.marriedFamily)}</span>` : ''}</div>
       ${hit && hit.kind !== '대표 이름' ? `<div class="pc-hit">‘${esc(hit.name)}’은(는) ${esc(hit.kind)}예요</div>` : ''}
       ${al.length ? `<div class="aliases">${al.map((a) => `<span class="alias"><i>${esc(a.kind)}</i>${esc(a.name)}${a.page ? `<small>p.${a.page}</small>` : ''}</span>`).join('')}</div>` : ''}
-      ${p.desc ? (p.descSpoiler ? `<div class="pc-desc spoil-blur" data-unblur title="톡해서 보기"><span>${esc(p.desc)}</span><em>AI 설명 · 스포 주의 · 톡해서 보기</em></div>` : `<div class="pc-desc">${esc(p.desc)}</div>`) : ''}
+      ${p.desc ? (p.descSpoiler ? `<button class="spoil-chip" type="button" data-unspoil="${p.id}">🙈 AI 설명 보기 <small>스포 주의</small></button>` : `<div class="pc-desc">${esc(p.desc)}</div>`) : ''}
     </div>
   </div>`;
 }
@@ -621,13 +638,20 @@ function renderPeople() {
   const ch = book.chapter || 0;
   const hasHidden = hiddenPeople.length || hiddenRels.length || state.current.allPeople.some((p) => p.chapter || (p.aliases || []).some((a) => a.hidden));
   const chapterBar = hasHidden || ch ? `<div class="chapter-bar">📖 지금 <button type="button" class="mini" id="chMinus">−</button><b id="chNum">${ch ? ch + '장' : '?장'}</b><button type="button" class="mini" id="chPlus">＋</button> 읽는 중 <small>AI로 가져온 정보는 이 장까지만 열려요</small></div>` : '';
-  const hiddenBox = hiddenPeople.length || hiddenRels.length ? `<div class="hidden-box">
-      <div class="hb-head">🙈 가려진 인물 ${hiddenPeople.length}명 · 관계 ${hiddenRels.length}개<button class="link" id="openAll" type="button">모두 열기</button></div>
-      <p class="hint">책에서 처음 보는 이름이 나오면 위 <b>이 이름 누구지?</b>에 쳐보세요. 가려진 인물이면 바로 열 수 있어요. <b>지금 몇 장</b>을 올리면 그 장까지 나온 것은 저절로 열려요. 아래는 언제 드러나는지 모르는 관계예요.</p>
-      ${hiddenRels.filter((r) => !r.chapter && people.some((p) => p.id === r.from) && people.some((p) => p.id === r.to)).map((r) => {
+  // 아직 안 만난 인물: 장 번호를 모르는 인물은 이름을 보여주고, 뒤 장 인물은 접어둠(스포 주의)
+  const unknownCh = hiddenPeople.filter((p) => !p.chapter);
+  const later = hiddenPeople.filter((p) => p.chapter).sort((a, b) => a.chapter - b.chapter);
+  const metRow = (p, showCh) => `<div class="hrel"><span>${esc(p.name)}${showCh ? ` <small>${p.chapter}장</small>` : ''}</span><button class="mini" data-reveal="${p.id}" type="button">만났어요</button></div>`;
+  const unknownRels = hiddenRels.filter((r) => !r.chapter && people.some((p) => p.id === r.from) && people.some((p) => p.id === r.to));
+  const hiddenBox = hiddenPeople.length || unknownRels.length ? `<div class="hidden-box">
+      <div class="hb-head">🙈 아직 안 만난 인물 ${hiddenPeople.length}명<button class="link" id="openAll" type="button">모두 열기</button></div>
+      <p class="hint">책에서 만나면 <b>만났어요</b>를 누르세요. 그 사람의 다른 이름과, 이미 만난 사람과의 관계가 열려요. <b>지금 몇 장</b>을 올리면 그 장까지 나온 인물은 저절로 열려요.</p>
+      ${unknownCh.map((p) => metRow(p, false)).join('')}
+      ${later.length ? `<details class="spoil"><summary>⚠ 뒤 장에 나오는 인물 ${later.length}명 · 스포 주의</summary>${later.map((p) => metRow(p, true)).join('')}</details>` : ''}
+      ${unknownRels.length ? `<div class="hb-sub">언제 드러나는지 모르는 관계</div>` + unknownRels.map((r) => {
         const a = people.find((p) => p.id === r.from); const b = people.find((p) => p.id === r.to);
         return `<div class="hrel"><span>${esc(a.name)} — ${esc(b.name)} <small>관계 가려짐</small></span><button class="mini" data-open-rel="${r.id}" type="button">열기</button></div>`;
-      }).join('')}
+      }).join('') : ''}
     </div>` : '';
   const bindHidden = () => {
     $('#chMinus') && ($('#chMinus').onclick = () => setChapter((book.chapter || 0) - 1));
@@ -635,6 +659,7 @@ function renderPeople() {
     $('#chNum') && ($('#chNum').onclick = () => { const v = prompt('지금 몇 장까지 읽었나요?', book.chapter || ''); if (v !== null && !isNaN(+v)) setChapter(+v); });
     $('#openAll') && ($('#openAll').onclick = () => revealAll());
     $$('[data-open-rel]').forEach((b) => (b.onclick = () => revealRelation(b.dataset.openRel)));
+    $$('.hidden-box [data-reveal]').forEach((b) => (b.onclick = () => revealPerson(b.dataset.reveal)));
   };
   if (!people.length) {
     body.innerHTML = `${tools}${chapterBar}${hiddenBox}${hiddenPeople.length ? `<div class="finder"><input id="nameFind" placeholder="이 이름 누구지? 책에 나온 이름을 쳐보세요" autocomplete="off"><div id="findOut"></div></div>` : ''}<div class="empty">외국 소설처럼 이름·애칭·호칭·결혼 후 성이 헷갈릴 때<br><b>＋ 인물</b>로 한 사람의 여러 이름을 묶어두세요.<br><small>"엘리자베스와 제인은 자매"처럼 <b>문장으로 적기</b>가 제일 빨라요.</small></div>`;
@@ -1092,9 +1117,18 @@ function personSheet(p) {
     <div class="field-title">다른 이름들 <small>애칭 · 호칭 · 결혼 후 이름 · 별명</small></div>
     <div id="aliasList">${(p.aliases || []).map(aliasRow).join('')}</div>
     <button class="ghost wide" id="addAlias" type="button">＋ 이름 추가</button>
-    <label>메모${p.descSpoiler ? ' <small>AI 설명 · 스포 주의</small>' : ''}<div class="${p.descSpoiler ? 'spoil-blur' : ''}" ${p.descSpoiler ? 'data-unblur' : ''}><textarea id="pDesc" rows="2" placeholder="어떤 사람인지 한 줄">${esc(p.desc || '')}</textarea>${p.descSpoiler ? '<em>톡해서 보기</em>' : ''}</div></label>
+    <label>메모${p.descSpoiler ? ' <small>AI 설명 · 스포 주의</small>' : ''}</label>
+    ${p.descSpoiler ? `<button class="spoil-chip wide" type="button" id="pUnspoil">🙈 AI 설명 보기 <small>스포 주의 · 한 번 보면 계속 보여요</small></button>` : ''}
+    <textarea id="pDesc" class="desc-area" rows="2" placeholder="어떤 사람인지 한 줄" ${p.descSpoiler ? 'hidden' : ''}>${esc(p.desc || '')}</textarea>
     <div class="btn-row">${isNew ? '' : '<button class="danger" id="pDel">삭제</button>'}<button class="primary" id="pSave">저장</button></div>`);
   const list = $('#aliasList', body);
+  $('#pUnspoil', body) && ($('#pUnspoil', body).onclick = async () => {
+    $('#pUnspoil', body).remove();
+    $('#pDesc', body).hidden = false;
+    p.descSpoiler = false;
+    const raw = state.current.allPeople.find((x) => x.id === p.id);
+    if (raw) await db.put('people', { ...raw, descSpoiler: false });
+  });
   const bindDel = () => $$('.al-del', list).forEach((b) => (b.onclick = () => b.parentElement.remove()));
   bindDel();
   $('#addAlias', body).onclick = () => { list.insertAdjacentHTML('beforeend', aliasRow()); bindDel(); $$('.al-name', list).at(-1).focus(); };
@@ -1107,6 +1141,7 @@ function personSheet(p) {
     p.marriedFamily = $('#pMar', body).value.trim();
     p.marriedPage = +$('#pMarP', body).value || 0;
     const newDesc = $('#pDesc', body).value.trim();
+    if (p.descSpoiler && $('#pDesc', body).hidden) { /* 안 본 설명은 그대로 둠 */ }
     if (newDesc !== (p.desc || '')) p.descSpoiler = false; // 직접 고친 설명은 가리지 않음
     p.desc = newDesc;
     p.aliases = $$('.alias-row', list).map((r) => ({
@@ -2155,13 +2190,13 @@ function handleShared() {
   }));
 }
 
-// 가려진 설명: 톡하면 그 자리에서만 보이기 (카드 열기보다 먼저 처리)
+// AI 설명 보기 버튼: 카드 열기보다 먼저 처리하고, 한 번 보면 저장해서 다시 안 가림
 document.addEventListener('click', (e) => {
-  const el = e.target.closest?.('[data-unblur]');
-  if (!el || el.classList.contains('open')) return;
+  const el = e.target.closest?.('[data-unspoil]');
+  if (!el) return;
   e.stopPropagation();
   e.preventDefault();
-  el.classList.add('open');
+  unspoilDesc(el.dataset.unspoil);
 }, true);
 
 /* ================= 시작 ================= */
