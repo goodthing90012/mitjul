@@ -363,6 +363,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   let inertia = 0;
   let wheelAnim = 0;
   const beginGesture = () => {
+    cancelAnimationFrame(fitAnim);
     if (gest) return;
     gest = { v0: { ...view }, r0: svg.getBoundingClientRect() };
     svg.style.transformOrigin = '0 0';
@@ -587,6 +588,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   }
 
   // 전체가 화면에 들어오게 (인라인은 축소만, 크게 보기는 확대도)
+  let fitAnim = 0;
   function fit(animate = true) {
     if (!nodes.size) return;
     const { w, h } = size();
@@ -606,16 +608,17 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
     const target = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
     if (!animate) { view = target; applyView(); return; }
+    // svg 요소를 CSS로 줄이면 바깥이 잘려 보이므로, 맞추기 애니메이션은 안쪽 그룹만 움직임
     stopInertia();
-    beginGesture();
+    commitGesture();
+    cancelAnimationFrame(fitAnim);
     const from = { ...view }; const t0 = performance.now();
     const step = () => {
       const p = Math.min(1, (performance.now() - t0) / 320);
       const e = 1 - Math.pow(1 - p, 3);
       view = { k: from.k + (target.k - from.k) * e, x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e };
-      renderGesture();
-      if (p < 1) requestAnimationFrame(step);
-      else requestAnimationFrame(commitGesture);
+      applyView();
+      fitAnim = p < 1 ? requestAnimationFrame(step) : 0;
     };
     step();
   }
