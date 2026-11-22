@@ -43,8 +43,8 @@ const el = (tag, attrs = {}, parent) => {
 // - 처음엔 계산을 미리 돌려서 정리된 모습으로 보여주고, 전체가 화면에 들어오게 맞춤
 // - 톡 = 그 인물의 관계만 강조(관계 이름 표시), 한 번 더 톡 = 편집
 // - zoomable이면 빈 곳 끌기 = 이동, 두 손가락 = 확대/축소
-const GP = { rep: 0.02, grav: 0.06, spring: 0.05, kmin: 60, kmax: 150, kf: 0.7 }; // 간격·끌어당김 세기
-export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable = false } = {}) {
+const GP = { rep: 0.02, grav: 0.06, spring: 0.05, kmin: 85, kmax: 150, kf: 0.8 }; // 간격·끌어당김 세기
+export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
@@ -128,7 +128,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
         e._lg = el('g', { 'pointer-events': 'none' }, gLabels);
         e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
         e._tx = el('text', { 'font-size': 11, fill: k.color, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': 600 }, e._lg);
-        e._tx.textContent = e.label;
+        // 관계도 위에는 짧게 (전체 이름은 목록과 편집에서)
+        e._tx.textContent = e.label.length > 9 ? e.label.slice(0, 8) + '…' : e.label;
       }
     }
     for (const n of nodes.values()) {
@@ -157,10 +158,12 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     styleFocus();
   }
 
-  // 강조: 고른 인물과 이어진 것만 진하게, 관계 이름은 많을 땐 강조된 것만
+  // 강조: 고른 인물과 이어진 것만 진하게. 관계 이름은 겹치지 않게 톡 한 인물의 것만 보여줌
   function styleFocus() {
-    const many = edges.length > 8;
     const near = new Set();
+    const mine = focus ? edges.filter((e) => e.from === focus || e.to === focus) : [];
+    // 관계가 많으면 선 위 글씨 대신 목록(onFocus)으로 보여줌 — 글씨끼리 겹치지 않게
+    const showLabels = mine.length <= 3;
     if (focus) {
       near.add(focus);
       for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
@@ -168,12 +171,13 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     for (const e of edges) {
       const on = !focus || e.from === focus || e.to === focus;
       e._line.setAttribute('opacity', on ? 1 : 0.12);
-      if (e._lg) e._lg.setAttribute('visibility', (focus ? on : !many) ? 'visible' : 'hidden');
+      if (e._lg) e._lg.setAttribute('visibility', focus && on && showLabels ? 'visible' : 'hidden');
     }
     for (const n of nodes.values()) {
       n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.28);
       n._g.classList.toggle('focused', n.p.id === focus);
     }
+    onFocus?.(focus ? nodes.get(focus)?.p : null, mine.map((e) => ({ rel: e, other: nodes.get(e.from === focus ? e.to : e.from)?.p })));
   }
 
   /* ---- 노드 조작: 톡 = 강조/편집, 짧게 끌기 = 옮기기, 길게 눌러 끌기 = 잇기 ---- */

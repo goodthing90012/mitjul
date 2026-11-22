@@ -496,3 +496,11 @@ textarea.desc-area[hidden] { display: none; }
 .so-row .mini:disabled { opacity: .3; }
 /* 토스트가 아래 버튼을 가리지 않게 (토스트는 눌리지 않음) */
 #toast, #toast.on { pointer-events: none !important; }
+
+/* 톡 한 인물의 관계 목록 (관계도 아래쪽) */
+.focus-card { margin-top: 8px; max-height: 240px; overflow-y: auto; background: rgba(255, 250, 240, .97); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); }
+.fc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.fc-head b { color: var(--ink); }
+.fc-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 6px 2px; border-top: 1px dashed var(--line); font-size: 13.5px; line-height: 1.35; }
+.fc-row em { font-style: normal; color: var(--muted); font-size: 12.5px; margin-left: auto; text-align: right; }
+.fc-row .rk { flex: none; }
