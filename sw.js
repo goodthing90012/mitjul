@@ -1,5 +1,5 @@
 // 밑줄서재 서비스워커 — 업데이트할 때마다 VERSION을 올려주세요
-const VERSION = 'mitjul-v49';
+const VERSION = 'mitjul-v50';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/bookapi.js', './js/scanner.js', './js/ocr.js', './js/graph.js', './js/shelf3d.js', './js/peopletext.js',
@@ -18,6 +18,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || NO_CACHE.test(req.url)) return;
   const url = new URL(req.url);
+  if (url.origin === location.origin && url.searchParams.has('check')) return; // 새 버전 확인은 캐시 없이 그대로
   if (url.origin === location.origin) {
     // 앱 파일: 네트워크 우선, 오프라인이면 캐시
     // cache:'no-cache' → GitHub Pages의 10분 HTTP 캐시를 건너뛰고 항상 새 파일 확인

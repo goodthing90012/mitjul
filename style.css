@@ -541,3 +541,7 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .today-card .today-text { font-size: 17px; line-height: 1.75; margin: 10px 0 8px; -webkit-line-clamp: unset; display: block; overflow: visible; }
 .today-card .today-src { font-size: 13px; }
 .today-card .today-img { max-height: 50vh; object-fit: contain; }
+/* 새 버전 알림 점 */
+#btnSettings { position: relative; }
+#btnSettings.has-dot::after { content: ''; position: absolute; top: 6px; right: 6px; width: 11px; height: 11px; border-radius: 50%; background: #d9483b; border: 2px solid #fffaf0; }
+.upd-new { color: #d9483b; }

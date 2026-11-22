@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2446,6 +2446,25 @@ async function searchSheet() {
 }
 
 /* ================= 설정 ================= */
+// 새 버전 알림: 처음 열었을 때의 sw.js 버전과 지금 서버의 버전이 다르면 설정 버튼에 빨간 점
+let bootSwVer = null;
+let lastUpdCheck = 0;
+const swVer = async () => {
+  const res = await fetch('./sw.js?check=' + Date.now(), { cache: 'no-store' });
+  return (await res.text()).match(/VERSION\s*=\s*'([^']+)'/)?.[1] || null;
+};
+async function checkUpdate(force) {
+  if (!navigator.onLine || (!force && Date.now() - lastUpdCheck < 5 * 60 * 1000)) return;
+  lastUpdCheck = Date.now();
+  try {
+    const v = await swVer();
+    if (!v) return;
+    if (!bootSwVer) { bootSwVer = v; return; }
+    state.hasUpdate = v !== bootSwVer;
+    $('#btnSettings').classList.toggle('has-dot', state.hasUpdate);
+  } catch {}
+}
+
 function settingsSheet() {
   const body = openSheet(`
     <h3>설정</h3>
@@ -2457,8 +2476,9 @@ function settingsSheet() {
     <p class="hint">기록은 이 기기의 브라우저에만 저장돼요. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 꼭 내보내 두세요.</p>
     <div class="btn-row"><button class="ghost" id="bExport">내보내기</button><label class="ghost">불러오기<input type="file" accept="application/json,.json" id="bImport" hidden></label></div>
     <h4 class="sec">앱 업데이트</h4>
-    <p class="hint">새 버전을 올렸는데 화면이 그대로면 눌러주세요. 기록은 지워지지 않아요.</p>
-    <button class="ghost wide" id="appReload">새로고침</button>
+    ${state.hasUpdate
+      ? '<p class="hint"><b class="upd-new">● 새 버전이 나왔어요.</b> 눌러서 받아주세요. 기록은 지워지지 않아요.</p><button class="primary wide" id="appReload" style="width:100%">새 버전 받기</button>'
+      : '<p class="hint">새 버전을 올렸는데 화면이 그대로면 눌러주세요. 기록은 지워지지 않아요.</p><button class="ghost wide" id="appReload">새로고침</button>'}
     <p class="muted center">밑줄서재 v${APP_VERSION}</p>`);
   $('#appReload', body).onclick = async (e) => {
     e.target.disabled = true;
@@ -2575,6 +2595,10 @@ async function init() {
 
   handleShared();
 
+  // 새 버전 확인: 처음 한 번 기준을 잡고, 앱으로 돌아올 때·30분마다 다시 확인
+  checkUpdate(true);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+  setInterval(() => checkUpdate(), 30 * 60 * 1000);
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
   }
