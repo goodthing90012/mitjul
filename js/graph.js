@@ -225,7 +225,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
         const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
         saved = null;
         autoFit = true;
-        animateTo(back, 700, fitTargetFor(back, null));
+        animateTo(back, 900, fitTargetFor(back, null));
       }
       return;
     }
@@ -256,7 +256,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       const out = Math.max(d, R + K);
       targets.set(n, { x: center.x + (dx / d) * out, y: center.y + (dy / d) * out });
     }
-    animateTo(targets, 700, fitTargetFor(targets, id));
+    animateTo(targets, 900, fitTargetFor(targets, id));
   }
   // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
   // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)
