@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -808,7 +808,7 @@ function renderPeople() {
       if (!a || !b) return '';
       const k = REL_KINDS[r.kind] || REL_KINDS.etc;
       const chk = sel === 'rels' ? `<span class="ck ${state.sel.has(r.id) ? 'on' : ''}"></span>` : '';
-      return `<button class="rel ${sel === 'rels' && state.sel.has(r.id) ? 'picked' : ''}" data-rid="${r.id}">${chk}<span class="rk" style="--rc:${k.color}">${k.label}</span>${esc(a.name)} — ${esc(b.name)}${r.label ? ` <em>${esc(r.label)}</em>` : ''}${r.page ? ` <small>p.${r.page}</small>` : ''}</button>`;
+      return `<button class="rel ${sel === 'rels' && state.sel.has(r.id) ? 'picked' : ''}" data-rid="${r.id}">${chk}<span class="rk" style="--rc:${k.color}">${k.label}</span>${esc(a.name)} — ${esc(b.name)}${r.spoiler ? ' <em>🙈 ?</em>' : r.label ? ` <em>${esc(r.label)}</em>` : ''}${r.page ? ` <small>p.${r.page}</small>` : ''}</button>`;
     }).join('') || '<div class="empty small">아직 관계가 없어요</div>'}</div>`}`;
 
   state.graph?.destroy();
@@ -837,7 +837,10 @@ function renderPeople() {
   $('#selPeople') && ($('#selPeople').onclick = () => startSelect('people'));
   $('#selRels') && ($('#selRels').onclick = () => startSelect('rels'));
   $$('.people .pcard').forEach((c) => (c.onclick = () => personSheet(people.find((p) => p.id === c.dataset.pid))));
-  $$('.rel').forEach((b) => (b.onclick = () => relationSheet(relations.find((r) => r.id === b.dataset.rid))));
+  $$('.rel').forEach((b) => (b.onclick = () => {
+    const r = relations.find((x) => x.id === b.dataset.rid);
+    if (r?.spoiler) spoilerRelSheet(r.id, renderPeople); else relationSheet(r);
+  }));
 }
 
 // 이름 찾기: 보이는 인물 + 가려진 인물(책에서 그 이름을 만났을 때 열 수 있게)
@@ -932,7 +935,32 @@ function graphHandlers(after) {
     onNodeTap: (p) => personSheet(p),
     onLink: (a, b) => quickRelSheet(a, b, after),
     onEmptyDoubleTap: () => quickPersonSheet(after),
+    onSpoilerTap: (id) => spoilerRelSheet(id, after),
   };
+}
+// 스포 관계: 책에서 그 일이 일어나면 열기
+function spoilerRelSheet(id, after) {
+  const r = state.current.allRelations.find((x) => x.id === id);
+  if (!r) return;
+  const nm = (pid) => state.current.allPeople.find((p) => p.id === pid)?.name || '?';
+  const body = openSheet(`
+    <h3>${esc(nm(r.from))} — ${esc(nm(r.to))}</h3>
+    <p class="hint">🙈 두 사람 사이에 <b>앞으로 일어날 일</b>이 있어요. 책에서 그 일이 일어났으면 열어보세요.</p>
+    <div class="btn-row"><button class="ghost" id="spEdit" type="button">관계 편집</button><button class="primary" id="spOpen" type="button">이 일이 일어났어요</button></div>`);
+  $('#spOpen', body).onclick = async () => {
+    await closeTop();
+    await revealRel(r, after);
+  };
+  $('#spEdit', body).onclick = async () => { await closeTop(); relationSheet(r); };
+}
+async function revealRel(r, after) {
+  await db.put('relations', { ...r, spoiler: false, page: r.page || currentReadPage() });
+  await afterChange();
+  after?.();
+  toast(r.label ? `‘${r.label}’ 관계가 열렸어요` : '관계가 열렸어요', 0, {
+    label: '되돌리기',
+    fn: async () => { await db.put('relations', r); await afterChange(); after?.(); toast('다시 가렸어요'); },
+  });
 }
 function quickRelSheet(a, b, after) {
   const body = openSheet(`
@@ -1027,7 +1055,7 @@ async function applyPeoplePlan(plan, { dry = false, hide = false } = {}) {
       if (a === b) { out.push({ ok: false, text: it.raw, why: '같은 사람이에요' }); continue; }
       const kind = it.kind || guessKind(it.label);
       const dup = [...rels, ...newRels].some((r) => ((r.from === a.id && r.to === b.id) || (r.from === b.id && r.to === a.id)) && r.kind === kind && (r.label || '') === (it.label || '') && (r.page || 0) === (it.page || 0));
-      if (!dup) newRels.push({ id: uid(), bookId, from: a.id, to: b.id, kind, label: it.label || '', page: it.page || 0, createdAt: t++, ...(hide ? { hidden: true, seq: relSeq++ } : {}) });
+      if (!dup) newRels.push({ id: uid(), bookId, from: a.id, to: b.id, kind, label: it.label || '', page: it.page || 0, createdAt: t++, ...(hide ? { hidden: true, seq: relSeq++ } : {}), ...(it.spoiler ? { spoiler: true } : {}) });
       out.push({ ok: true, text: `${a.name} — ${b.name}`, sub: `${REL_KINDS[kind].label}${it.label ? ' · ' + it.label : ''}${it.page ? ' · p.' + it.page : ''}${dup ? ' (이미 있음)' : ''}`, kind });
     } else if (it.type === 'alias') {
       const p = get(it.name, it.page);
@@ -1127,7 +1155,7 @@ const JSON_EXAMPLE = {
   relations: [
     { a: '엘리자베스 베넷', b: '제인 베넷', kind: '가족', label: '자매' },
     { a: '제인 베넷', b: '빙리', kind: '연인', label: '호감' },
-    { a: '제인 베넷', b: '빙리', kind: '연인', label: '약혼' },
+    { a: '제인 베넷', b: '빙리', kind: '연인', label: '약혼', spoiler: true },
   ],
 };
 const KIND_KO = { 가족: 'family', 연인: 'love', 부부: 'love', '연인·부부': 'love', 친구: 'friend', 동료: 'friend', '친구·동료': 'friend', 적대: 'enemy', 갈등: 'enemy', '적대·갈등': 'enemy', 기타: 'etc' };
@@ -1142,7 +1170,7 @@ function jsonToPlan(data) {
     const a = r.a || r.from; const b = r.b || r.to;
     if (!a || !b) continue;
     const kind = REL_KINDS[r.kind] ? r.kind : KIND_KO[r.kind] || guessKind(r.label || r.kind || '');
-    plan.push({ type: 'rel', a: String(a), b: String(b), kind, label: r.label || '', page: +r.page || 0, chapter: +r.chapter || 0, raw: `${a} — ${b}` });
+    plan.push({ type: 'rel', a: String(a), b: String(b), kind, label: r.label || '', page: +r.page || 0, chapter: +r.chapter || 0, spoiler: !!r.spoiler, raw: `${a} — ${b}` });
   }
   return plan;
 }
@@ -1154,6 +1182,7 @@ function jsonPeopleSheet() {
 - 애칭·호칭·결혼 후 이름·별명은 aliases에 (kind: 애칭/호칭/결혼 후 이름/별명)
 - relations의 kind는 가족/연인/친구/적대/기타 중 하나, label에는 자매·약혼 같은 구체적인 관계
 - 관계가 이야기 중에 바뀌면(예: 호감 → 약혼 → 파혼) 하나로 합치지 말고 단계마다 따로, 일어나는 순서대로 적어줘
+- 약혼·결혼·사랑의 도피·죽음·배신·정체 탄로처럼 이야기 중에 '사건'으로 생기는 관계에는 spoiler: true 를 붙여줘
 - desc에는 처음 등장할 때 알 수 있는 정보만 짧게. 나중에 밝혀지는 사실(정체, 결말, 파혼, 죽음 등)은 쓰지 마
 
 ${JSON.stringify(JSON_EXAMPLE, null, 2)}`;
@@ -1312,13 +1341,16 @@ function relationSheet(r) {
       <label>인물 B<select id="rB">${opts(r.to)}</select></label>
     </div>`}
     <label>종류<div class="seg" id="rKind">${Object.entries(REL_KINDS).map(([k, v]) => `<button type="button" data-k="${k}" class="${k === r.kind ? 'on' : ''}" style="--rc:${v.color}">${v.label}</button>`).join('')}</div></label>
-    <div class="grid2">
+    ${r.spoiler ? '<button class="spoil-chip wide" type="button" id="rUnspoil">🙈 관계 이름 보기 <small>스포 주의</small></button>' : ''}
+    <div class="grid2" ${r.spoiler ? 'hidden id="rLabelBox"' : ''}>
       <label>관계 이름<input id="rLabel" value="${esc(r.label)}" placeholder="예: 남매, 약혼, 하녀"></label>
       <label>드러난 쪽<input id="rPage" type="number" inputmode="numeric" value="${r.page || ''}"></label>
     </div>
+    <label class="check-row"><input type="checkbox" id="rSpoil" ${r.spoiler ? 'checked' : ''}> 🙈 스포 관계 <small>사랑의 도피·결혼·죽음처럼 사건이면 체크. 관계도에 🙈로 가려지고, 일이 일어나면 열어요</small></label>
     <p class="hint">같은 두 사람이라도 쪽마다 관계를 따로 적으면(친구 → 부부) 슬라이더에 따라 바뀌어 보여요.</p>
     ${isNew ? '' : '<button class="ghost wide" id="rNext" type="button">🔄 관계가 바뀌었어요 · 다음 단계 보기</button>'}
     <div class="btn-row">${isNew ? '' : '<button class="danger" id="rDel">삭제</button>'}<button class="primary" id="rSave">저장</button></div>`);
+  $('#rUnspoil', body) && ($('#rUnspoil', body).onclick = () => { $('#rUnspoil', body).remove(); $('#rLabelBox', body).hidden = false; });
   $('#rNext', body) && ($('#rNext', body).onclick = async () => { if (await nextStage(r)) await closeTop(); });
   $$('#rKind button', body).forEach((b) => (b.onclick = () => { $$('#rKind button', body).forEach((x) => x.classList.remove('on')); b.classList.add('on'); r.kind = b.dataset.k; }));
   const picked = new Set();
@@ -1337,13 +1369,13 @@ function relationSheet(r) {
       const from = $('#rA', body).value;
       let i = 0;
       for (const to of picked) {
-        await db.put('relations', { id: uid(), bookId: r.bookId, from, to, kind: r.kind, label, page, createdAt: Date.now() + i++ });
+        await db.put('relations', { id: uid(), bookId: r.bookId, from, to, kind: r.kind, label, page, createdAt: Date.now() + i++, ...($('#rSpoil', body).checked ? { spoiler: true } : {}) });
       }
       if (picked.size > 1) toast(`${picked.size}명과 한 번에 이었어요`);
     } else {
       r.from = $('#rA', body).value; r.to = $('#rB', body).value;
       if (r.from === r.to) { toast('서로 다른 두 사람을 골라주세요'); return; }
-      r.label = label; r.page = page;
+      r.label = label; r.page = page; r.spoiler = $('#rSpoil', body).checked;
       await db.put('relations', r);
     }
     await afterChange();

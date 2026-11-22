@@ -10,6 +10,8 @@ export const REL_KINDS = {
   etc: { label: '기타', color: '#9a8f84', dash: '2 4' },
 };
 
+const SPOILER_KIND = { label: '스포', color: '#a89c8e', dash: '3 4' };
+
 export const ALIAS_KINDS = ['본명', '성', '애칭', '호칭', '결혼 후 이름', '별명', '직함'];
 
 function hash(s) {
@@ -52,7 +54,7 @@ function splitLabel(t) {
   const c = Math.ceil(mid); return [t.slice(0, c), t.slice(c)];
 }
 
-export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable = false } = {}) {
+export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
@@ -133,11 +135,22 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     gNodes.textContent = '';
     gLabels.textContent = '';
     for (const e of edges) {
-      const k = REL_KINDS[e.kind] || REL_KINDS.etc;
-      e._line = el('line', { stroke: k.color, 'stroke-width': e.kind === 'family' || e.kind === 'love' ? 2.6 : 1.8, 'stroke-dasharray': k.dash }, gEdges);
+      // 스포 관계: 종류 색도 힌트가 되니 회색 점선 + 🙈 (톡 하면 '이 일이 일어났어요')
+      const k = e.spoiler ? SPOILER_KIND : REL_KINDS[e.kind] || REL_KINDS.etc;
+      e._line = el('line', { stroke: k.color, 'stroke-width': !e.spoiler && (e.kind === 'family' || e.kind === 'love') ? 2.6 : 1.8, 'stroke-dasharray': k.dash }, gEdges);
       e._lg = null;
+      if (e.spoiler) e.label = '🙈 ?';
       if (e.label) {
-        e._lg = el('g', { 'pointer-events': 'none' }, gLabels);
+        e._lg = el('g', { 'pointer-events': e.spoiler ? 'auto' : 'none', class: e.spoiler ? 'glabel-tap' : '' }, gLabels);
+        if (e.spoiler) {
+          let down = null;
+          e._lg.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); down = { x: ev.clientX, y: ev.clientY }; });
+          e._lg.addEventListener('pointerup', (ev) => {
+            ev.stopPropagation();
+            if (down && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) < 10) onSpoilerTap?.(e.id);
+            down = null;
+          });
+        }
         e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
         e._tx = el('text', { 'font-size': 11, fill: k.color, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': 600 }, e._lg);
         // 말줄임 없이 전부. 길면 띄어쓰기 기준으로 두 줄
@@ -406,7 +419,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   let bgMoved = 0;
   let vel = { x: 0, y: 0, t: 0 };
   svg.addEventListener('pointerdown', (e) => {
-    if (e.target.closest?.('.gnode')) return;
+    if (e.target.closest?.('.gnode, .glabel-tap')) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     bgMoved = 0;
     if (!zoomable) return;
