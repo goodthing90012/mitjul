@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.8.2';
+const APP_VERSION = '1.9.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -772,7 +772,7 @@ function renderPeople() {
       <div id="findOut"></div>
     </div>
     <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
-    <p class="graph-tip"><b>톡</b> = 그 인물 관계와 <b>관계 이름</b> 보기 · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
+    <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
       <input type="range" id="pageSlider" min="0" max="${maxP}" value="${page}">
@@ -796,7 +796,7 @@ function renderPeople() {
 
   state.graph?.destroy();
   bindTools();
-  state.graph = createGraph($('#graphSvg'), graphHandlers(null, $('#graphSvg').parentElement));
+  state.graph = createGraph($('#graphSvg'), graphHandlers());
   state.graph.setData(people, relations, page);
   $('#graphExpand').onclick = () => graphSheet(maxP);
 
@@ -893,7 +893,7 @@ function graphSheet(maxP) {
       <input type="range" id="bigSlider" min="0" max="${maxP}" value="${state.graphPage}">
     </div>`, { full: true, onClose: () => { g?.destroy(); if (state.current && state.tab === 'people') renderPeople(); } });
   requestAnimationFrame(() => {
-    g = createGraph($('#graphBig', body), { ...graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage), $('#graphBig', body).parentElement), zoomable: true });
+    g = createGraph($('#graphBig', body), { ...graphHandlers(() => g?.setData(state.current.people, state.current.relations, state.graphPage)), zoomable: true });
     g.setData(people, relations, state.graphPage);
     $('#graphFit', body).onclick = () => g.fit();
   });
@@ -910,25 +910,8 @@ function graphSheet(maxP) {
 function currentReadPage() {
   return state.graphPage != null && state.graphMax && state.graphPage < state.graphMax ? state.graphPage : 0;
 }
-// 톡 한 인물의 관계를 관계도 아래쪽에 목록으로 (선 위 글씨가 겹치지 않게)
-function focusCard(box) {
-  return (p, list) => {
-    // 관계도를 가리지 않게 관계도 바로 아래에 붙임
-    let card = box.nextElementSibling?.classList.contains('focus-card') ? box.nextElementSibling : null;
-    if (!p) { card?.remove(); return; }
-    if (!card) { card = document.createElement('div'); card.className = 'focus-card'; box.insertAdjacentElement('afterend', card); }
-    card.innerHTML = `<div class="fc-head"><span><b>${esc(p.name)}</b>의 관계 ${list.length}개</span><button class="mini" type="button" data-fc-edit>편집</button></div>` +
-      (list.length ? list.map(({ rel, other }) => {
-        const k = REL_KINDS[rel.kind] || REL_KINDS.etc;
-        return `<button class="fc-row" type="button" data-rid="${rel.id}"><span class="rk" style="--rc:${k.color}">${k.label}</span><b>${esc(other?.name || '')}</b>${rel.label ? `<em>${esc(rel.label)}</em>` : ''}</button>`;
-      }).join('') : '<div class="muted">아직 이어진 관계가 없어요 · 길게 눌러 다른 인물로 끌면 이어져요</div>');
-    card.querySelector('[data-fc-edit]').onclick = () => personSheet(state.current.people.find((x) => x.id === p.id) || p);
-    card.querySelectorAll('[data-rid]').forEach((b) => (b.onclick = () => relationSheet(state.current.relations.find((r) => r.id === b.dataset.rid))));
-  };
-}
-function graphHandlers(after, box) {
+function graphHandlers(after) {
   return {
-    onFocus: box ? focusCard(box) : undefined,
     onNodeTap: (p) => personSheet(p),
     onLink: (a, b) => quickRelSheet(a, b, after),
     onEmptyDoubleTap: () => quickPersonSheet(after),

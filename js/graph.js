@@ -44,7 +44,7 @@ const el = (tag, attrs = {}, parent) => {
 // - 톡 = 그 인물의 관계만 강조(관계 이름 표시), 한 번 더 톡 = 편집
 // - zoomable이면 빈 곳 끌기 = 이동, 두 손가락 = 확대/축소
 const GP = { rep: 0.02, grav: 0.06, spring: 0.05, kmin: 85, kmax: 150, kf: 0.8 }; // 간격·끌어당김 세기
-export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus, zoomable = false } = {}) {
+export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
@@ -74,7 +74,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
     const { w, h } = size();
     const vis = people.filter((p) => (p.firstPage || 0) <= page);
     const n = Math.max(vis.length, 1);
-    K = Math.max(GP.kmin, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
+    // 관계 이름이 선 위에 들어갈 만큼 간격 확보
+    const avgLabel = relations.length ? relations.reduce((sum, r) => sum + Math.min(9, (r.label || '').length), 0) / relations.length : 0;
+    K = Math.max(GP.kmin, 55 + avgLabel * 12, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
     const next = new Map();
     let fresh = 0;
     // 새 인물은 같은 가문 사람 근처, 없으면 원형으로 배치
@@ -90,7 +92,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
         : { p, x: w / 2 + Math.cos(ang) * R, y: h / 2 + Math.sin(ang) * R, vx: 0, vy: 0 });
     });
     nodes = next;
-    if (focus && !nodes.has(focus)) focus = null;
+    if (focus) { focus = null; saved = null; } // 데이터가 바뀌면 강조를 풀고 새로 배치
     const byPair = new Map();
     relations
       .filter((r) => (r.page || 0) <= page && nodes.has(r.from) && nodes.has(r.to))
@@ -102,13 +104,15 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
           : (r.chapter || 0) > (cur.chapter || 0) || ((r.chapter || 0) === (cur.chapter || 0) && (r.page || 0) >= (cur.page || 0)));
         if (later) byPair.set(k, r);
       });
-    edges = [...byPair.values()];
+    // 관계 원본에 그림 요소를 붙이지 않게 복사본으로 (작은 관계도와 크게 보기가 같은 관계를 공유해서 선이 어긋나던 문제)
+    edges = [...byPair.values()].map((r) => ({ ...r }));
     build(page);
     // 새로 생긴 게 많으면 미리 계산해서 정돈된 상태로 보여줌
     if (fresh) {
       alpha = 1;
       for (let i = 0; i < 320; i++) tick();
       separate(80);
+      placeLabels();
       fit(false);
     }
     alpha = fresh ? 0.04 : Math.max(alpha, 0.25);
@@ -161,23 +165,102 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
   // 강조: 고른 인물과 이어진 것만 진하게. 관계 이름은 겹치지 않게 톡 한 인물의 것만 보여줌
   function styleFocus() {
     const near = new Set();
-    const mine = focus ? edges.filter((e) => e.from === focus || e.to === focus) : [];
-    // 관계가 많으면 선 위 글씨 대신 목록(onFocus)으로 보여줌 — 글씨끼리 겹치지 않게
-    const showLabels = mine.length <= 3;
     if (focus) {
       near.add(focus);
       for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
     }
     for (const e of edges) {
       const on = !focus || e.from === focus || e.to === focus;
-      e._line.setAttribute('opacity', on ? 1 : 0.12);
-      if (e._lg) e._lg.setAttribute('visibility', focus && on && showLabels ? 'visible' : 'hidden');
+      e._line.setAttribute('opacity', on ? 1 : 0.1);
     }
     for (const n of nodes.values()) {
-      n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.28);
+      n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.22);
       n._g.classList.toggle('focused', n.p.id === focus);
     }
-    onFocus?.(focus ? nodes.get(focus)?.p : null, mine.map((e) => ({ rel: e, other: nodes.get(e.from === focus ? e.to : e.from)?.p })));
+    placeLabels();
+  }
+
+  /* ---- 스포트라이트: 톡 한 인물을 가운데, 이어진 사람을 둥글게, 관계 이름은 선 위에 겹치지 않게 ---- */
+  let saved = null;   // 강조 전 자리 (풀면 되돌아감)
+  let tween = 0;
+  function animateTo(targets, dur, done) {
+    cancelAnimationFrame(tween);
+    cancelAnimationFrame(raf); raf = 0;
+    const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    const t0 = performance.now();
+    const step = () => {
+      const p = Math.min(1, (performance.now() - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
+      placeLabels();
+      draw();
+      if (p < 1) tween = requestAnimationFrame(step);
+      else { tween = 0; done?.(); }
+    };
+    tween = requestAnimationFrame(step);
+  }
+  function setFocus(id) {
+    if (id === focus) return;
+    if (!id) {
+      focus = null;
+      styleFocus();
+      if (saved) {
+        const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
+        saved = null;
+        animateTo(back, 380, () => fit(true));
+      }
+      return;
+    }
+    if (!saved) saved = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    focus = id;
+    styleFocus();
+    const c = nodes.get(id);
+    const center = saved.get(c);
+    const mine = edges.filter((e) => e.from === id || e.to === id);
+    const nbrs = [...new Set(mine.map((e) => (e.from === id ? e.to : e.from)))].map((x) => nodes.get(x));
+    // 지금 보이는 방향을 유지한 채 고르게 둥글게 배치
+    nbrs.sort((a, b) => Math.atan2(saved.get(a).y - center.y, saved.get(a).x - center.x) - Math.atan2(saved.get(b).y - center.y, saved.get(b).x - center.x));
+    const labelW = Math.max(60, ...mine.map((e) => (e._tw || e.label?.length * 11 || 0) + 16));
+    const ringByCount = (nbrs.length * Math.max(labelW, 70)) / (2 * Math.PI) * 1.3; // 둘레에 이름·관계 이름이 들어갈 만큼
+    const R = Math.max(K * 1.4, 120, ringByCount);
+    const a0 = nbrs.length ? Math.atan2(saved.get(nbrs[0]).y - center.y, saved.get(nbrs[0]).x - center.x) : 0;
+    const targets = new Map();
+    targets.set(c, { ...center });
+    nbrs.forEach((n, i) => {
+      const a = a0 + (i / nbrs.length) * Math.PI * 2;
+      targets.set(n, { x: center.x + Math.cos(a) * R, y: center.y + Math.sin(a) * R });
+    });
+    // 나머지 인물은 바깥으로 밀어두기 (흐리게)
+    for (const n of nodes.values()) {
+      if (targets.has(n)) continue;
+      const s0 = saved.get(n);
+      const dx = s0.x - center.x; const dy = s0.y - center.y; const d = Math.hypot(dx, dy) || 1;
+      const out = Math.max(d, R + K);
+      targets.set(n, { x: center.x + (dx / d) * out, y: center.y + (dy / d) * out });
+    }
+    animateTo(targets, 420, () => fit(true));
+  }
+  // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
+  // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)
+  function placeLabels() {
+    const boxes = [...nodes.values()].map((n) => ({ x0: n.x - n.bw / 2 - 2, x1: n.x + n.bw / 2 + 2, y0: n.y - NODE_R - 2, y1: n.y - NODE_R + n.bh }));
+    const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+    // 짧은 선부터 자리를 잡으면 긴 선에 여유가 생김
+    const list = edges.filter((e) => e._lg && (!focus || e.from === focus || e.to === focus))
+      .map((e) => { const a = nodes.get(e.from); const b = nodes.get(e.to); return { e, a, b, len: Math.hypot(b.x - a.x, b.y - a.y) }; })
+      .sort((x, y) => x.len - y.len);
+    for (const e of edges) if (e._lg) e._vis = false;
+    for (const { e, a: a0, b: b0 } of list) {
+      // 강조 중이면 가운데 인물 쪽에서부터 재기
+      const a = focus && e.to === focus ? b0 : a0; const b = focus && e.to === focus ? a0 : b0;
+      const tw = (e._tw || e.label.length * 11) + 14;
+      for (const t of [0.5, 0.42, 0.58, 0.35, 0.65, 0.28, 0.72]) {
+        const x = a.x + (b.x - a.x) * t; const y = a.y + (b.y - a.y) * t;
+        const box = { x0: x - tw / 2, x1: x + tw / 2, y0: y - 11, y1: y + 11 };
+        if (!hit(box)) { e._t = t; e._from = a.p.id; e._vis = true; boxes.push(box); break; }
+      }
+    }
+    for (const e of edges) if (e._lg) e._lg.setAttribute('visibility', e._vis ? 'visible' : 'hidden');
   }
 
   /* ---- 노드 조작: 톡 = 강조/편집, 짧게 끌기 = 옮기기, 길게 눌러 끌기 = 잇기 ---- */
@@ -251,7 +334,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
       }
       if (moved < 6) {
         if (focus === n.p.id) onNodeTap?.(n.p);
-        else { focus = n.p.id; styleFocus(); }
+        else setFocus(n.p.id);
       }
     };
     n._g.addEventListener('pointerup', up);
@@ -376,7 +459,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
       onEmptyDoubleTap?.();
     } else {
       lastTap = { t: now, ...pt };
-      if (focus) { focus = null; styleFocus(); }
+      if (focus) setFocus(null);
     }
   };
   svg.addEventListener('pointerup', bgUp);
@@ -493,7 +576,14 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
     if (!nodes.size) return;
     const { w, h } = size();
     let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
-    for (const n of nodes.values()) {
+    // 강조 중이면 가운데 인물과 이어진 사람들만 화면에 맞춤
+    let list = [...nodes.values()];
+    if (focus) {
+      const near = new Set([focus]);
+      for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
+      list = list.filter((n) => near.has(n.p.id));
+    }
+    for (const n of list) {
       x0 = Math.min(x0, n.x - n.bw / 2); x1 = Math.max(x1, n.x + n.bw / 2);
       y0 = Math.min(y0, n.y - NODE_R - 4); y1 = Math.max(y1, n.y + n.bh - NODE_R);
     }
@@ -521,7 +611,11 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
       e._line.setAttribute('x1', a.x); e._line.setAttribute('y1', a.y);
       e._line.setAttribute('x2', b.x); e._line.setAttribute('y2', b.y);
       if (e._lg) {
-        const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2;
+        let mx = (a.x + b.x) / 2; let my = (a.y + b.y) / 2;
+        if (e._t != null) {
+          const f = e._from === b.p.id ? b : a; const o = f === a ? b : a;
+          mx = f.x + (o.x - f.x) * e._t; my = f.y + (o.y - f.y) * e._t;
+        }
         const tw = e._tw || (e._tw = e._tx.getComputedTextLength?.() || e.label.length * 11);
         e._tx.setAttribute('x', mx); e._tx.setAttribute('y', my);
         e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - 9);
@@ -532,12 +626,13 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
   }
 
   function kick() {
-    if (raf) return;
+    if (raf || tween) return;
+    if (focus) { placeLabels(); draw(); return; } // 강조 중엔 배치를 흔들지 않음
     const loop = () => {
       tick();
       draw();
       if (alpha > 0.02) raf = requestAnimationFrame(loop);
-      else raf = 0;
+      else { raf = 0; placeLabels(); draw(); } // 멈추면 관계 이름 자리 다시 잡기
     };
     raf = requestAnimationFrame(loop);
   }
@@ -546,6 +641,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onFocus,
   return {
     setData,
     fit: () => fit(true),
-    destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
+    destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
   };
 }
