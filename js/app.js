@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.13.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1835,8 +1835,14 @@ async function underlineSheet(file, onUse, onPage) {
     if (act) {
       const dx = p.x - act.p.x; const dy = p.y - act.p.y; const s0 = act.s0;
       if (act.mode === 'move') Object.assign(sel, { x0: s0.x0 + dx, y0: s0.y0 + dy, x1: s0.x1 + dx, y1: s0.y1 + dy });
-      else if (act.mode === 'a') Object.assign(sel, { x0: s0.x0 + dx, y0: s0.y0 + dy });
-      else Object.assign(sel, { x1: s0.x1 + dx, y1: s0.y1 + dy });
+      else {
+        // 끝을 끌 때도 거의 수평이면 반대쪽 끝 높이에 맞춰 일직선으로
+        const A = act.mode === 'a';
+        const nx = (A ? s0.x0 : s0.x1) + dx; let ny = (A ? s0.y0 : s0.y1) + dy;
+        const ox = A ? s0.x1 : s0.x0; const oy = A ? s0.y1 : s0.y0;
+        if (Math.abs(ny - oy) < Math.abs(nx - ox) * 0.12) ny = oy;
+        Object.assign(sel, A ? { x0: nx, y0: ny } : { x1: nx, y1: ny });
+      }
       paintHl();
       return;
     }
