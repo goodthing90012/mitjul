@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.6.2';
+const APP_VERSION = '1.6.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -181,7 +181,10 @@ async function loadCurrent(bookId) {
   const ch = book.chapter || 0;
   const shown = people.filter((p) => isRevealed(p, ch)).map((p) => sanitizePerson(p, ch));
   const ids = new Set(shown.map((p) => p.id));
-  const relShown = relations.filter((r) => isRevealed(r, ch) && ids.has(r.from) && ids.has(r.to));
+  // 관계: 두 사람을 다 만났으면, 둘 중 나중에 나오는 사람의 장(또는 지금 장)까지 드러난 단계는 보여줌
+  const pch = new Map(people.map((p) => [p.id, p.chapter || 0]));
+  const relShown = relations.filter((r) => ids.has(r.from) && ids.has(r.to) &&
+    (isRevealed(r, ch) || (r.chapter && r.chapter <= Math.max(ch, pch.get(r.from), pch.get(r.to)))));
   const relIds = new Set(relShown.map((r) => r.id));
   state.current = {
     book, quotes, people: shown, relations: relShown,
@@ -679,6 +682,7 @@ function renderPeople() {
       <div id="findOut"></div>
     </div>
     <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
+    ${unknownRels.length ? `<p class="graph-warn">🙈 두 사람 다 만났지만 언제 드러나는지 몰라 가려둔 관계가 <b>${unknownRels.length}개</b> 있어요 · 아래 <b>아직 안 만난 인물</b> 상자에서 열 수 있어요</p>` : ''}
     <p class="graph-tip"><b>톡</b> = 그 인물 관계만 보기 · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
