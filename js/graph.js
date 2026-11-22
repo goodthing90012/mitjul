@@ -64,7 +64,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   const gView = el('g', {}, svg);
   const gEdges = el('g', {}, gView);
   const gNodes = el('g', {}, gView);
-  const gLabels = el('g', {}, gView);
+  const gLabels = el('g', { class: 'glabels' }, gView);
   const gTemp = el('g', { 'pointer-events': 'none' }, gView);
   const tempLine = el('line', { stroke: '#c8553d', 'stroke-width': 3, 'stroke-dasharray': '6 5', 'stroke-linecap': 'round', visibility: 'hidden' }, gTemp);
   const tempRing = el('circle', { r: 27, fill: 'none', stroke: '#c8553d', 'stroke-width': 3, visibility: 'hidden' }, gTemp);
@@ -198,15 +198,20 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
     cancelAnimationFrame(fitAnim); fitAnim = 0;
     const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     const v0 = { ...view };
-    const t0 = performance.now();
+    let t0 = 0;
+    // 움직이는 동안엔 관계 이름을 살짝 감췄다가 멈추면 다시 (글자 다시 그리는 부담을 줄여 훨씬 매끄럽게)
+    gLabels.style.opacity = '0';
+    svg.classList.add('anim');
     const step = (now) => {
+      if (!t0) t0 = now;
       const p = Math.min(1, (now - t0) / dur);
-      const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // 천천히-빠르게-천천히
+      const e = 1 - Math.pow(1 - p, 5); // 빠르게 출발해서 아주 천천히 멈춤
+
       for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
       if (viewTo) { view = { k: v0.k + (viewTo.k - v0.k) * e, x: v0.x + (viewTo.x - v0.x) * e, y: v0.y + (viewTo.y - v0.y) * e }; applyView(); }
       draw(); // 관계 이름 자리 계산은 끝나고 한 번만
       if (p < 1) tween = requestAnimationFrame(step);
-      else { tween = 0; placeLabels(); draw(); done?.(); }
+      else { tween = 0; placeLabels(); draw(); svg.classList.remove('anim'); gLabels.style.opacity = ''; done?.(); }
     };
     tween = requestAnimationFrame(step);
   }
@@ -220,7 +225,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
         const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
         saved = null;
         autoFit = true;
-        animateTo(back, 480, fitTargetFor(back, null));
+        animateTo(back, 700, fitTargetFor(back, null));
       }
       return;
     }
@@ -251,7 +256,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       const out = Math.max(d, R + K);
       targets.set(n, { x: center.x + (dx / d) * out, y: center.y + (dy / d) * out });
     }
-    animateTo(targets, 480, fitTargetFor(targets, id));
+    animateTo(targets, 700, fitTargetFor(targets, id));
   }
   // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
   // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)

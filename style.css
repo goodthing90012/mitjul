@@ -507,3 +507,6 @@ textarea.desc-area[hidden] { display: none; }
 
 /* 관계도: 확대·이동 중 svg 바깥 그림이 잘리지 않게 (자르는 건 바깥 상자가 담당) */
 .graph-box svg { overflow: visible; }
+/* 관계도 애니메이션: 관계 이름은 페이드, 움직이는 동안 글자는 빠른 렌더링 */
+.graph-box svg g.glabels { transition: opacity .22s ease; }
+.graph-box svg.anim text { text-rendering: optimizeSpeed; }
