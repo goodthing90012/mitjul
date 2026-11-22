@@ -364,6 +364,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   let wheelAnim = 0;
   const beginGesture = () => {
     cancelAnimationFrame(fitAnim);
+    autoFit = false;
     if (gest) return;
     gest = { v0: { ...view }, r0: svg.getBoundingClientRect() };
     svg.style.transformOrigin = '0 0';
@@ -589,8 +590,10 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
 
   // 전체가 화면에 들어오게 (인라인은 축소만, 크게 보기는 확대도)
   let fitAnim = 0;
+  let autoFit = true; // 사용자가 직접 옮기거나 확대하기 전까지는 항상 전체가 보이게
   function fit(animate = true) {
     if (!nodes.size) return;
+    autoFit = !focus;
     const { w, h } = size();
     let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
     // 강조 중이면 가운데 인물과 이어진 사람들만 화면에 맞춤
@@ -651,7 +654,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       tick();
       draw();
       if (alpha > 0.02) raf = requestAnimationFrame(loop);
-      else { raf = 0; placeLabels(); draw(); } // 멈추면 관계 이름 자리 다시 잡기
+      else { raf = 0; placeLabels(); draw(); if (autoFit && !gest) fit(true); } // 멈추면 관계 이름 자리 다시 잡기 (+ 전체 보기 상태면 다시 맞춤)
     };
     raf = requestAnimationFrame(loop);
   }
@@ -659,7 +662,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
   applyView();
   return {
     setData,
-    fit: () => fit(true),
+    fit: () => { if (focus) setFocus(null); else fit(true); }, // 전체 보기 = 강조 풀고 전체 맞춤
     destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
   };
 }
