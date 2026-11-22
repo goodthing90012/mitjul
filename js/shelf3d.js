@@ -262,13 +262,13 @@ export class Shelf {
   _fitCam(reset) {
     const tan = this._tan();
     const { H } = this.cam;
-    const fit = (H / 2 + 0.3) / tan;
+    const fit = (H / 2 + 0.45) / tan; // 위 여유 + 아래 받침대까지
     this.cam.fitDist = fit;
     this.cam.maxDist = fit * 1.08;
     this.cam.minDist = Math.min(fit, 4.2);
     if (reset) {
       this.cam.dist = fit;
-      this.cam.y = H / 2;
+      this.cam.y = H / 2 - 0.15;
       this.cam.x = -9999;
     }
     this._clampCam();
@@ -280,9 +280,9 @@ export class Shelf {
     const visH = 2 * c.dist * tan;
     const visW = visH * this.camera.aspect;
     const bx = Math.max(0, (c.W + 0.6) / 2 - visW / 2);
-    const by = Math.max(0, (c.H + 0.4) / 2 - visH / 2);
+    const by = Math.max(0, (c.H + 0.7) / 2 - visH / 2);
     c.x = clamp(c.x, -bx, bx);
-    c.y = clamp(c.y, c.H / 2 - by, c.H / 2 + by);
+    c.y = clamp(c.y, c.H / 2 - 0.15 - by, c.H / 2 - 0.15 + by);
   }
   _applyCam() {
     this.camera.position.set(this.cam.x, this.cam.y, CASE_D / 2 + this.cam.dist);
@@ -405,8 +405,11 @@ export class Shelf {
     for (let i = 0; i <= ROWS.length; i++) {
       add(new THREE.BoxGeometry(W, BOARD, CASE_D), this.mats.wood, 0, i * ROW_H + BOARD / 2, 0);
     }
+    // 받침대 (맨 아래 명찰이 바닥에 묻히지 않게 책장을 살짝 띄움)
+    const PL = 0.32;
+    add(new THREE.BoxGeometry(W + BOARD * 3.2, PL, CASE_D - 0.08), this.mats.wood, 0, -PL / 2, -0.04);
     // 바닥
-    const floor = add(new THREE.PlaneGeometry(60, 30), new THREE.MeshStandardMaterial({ color: '#cbb89a', roughness: 1 }), 0, 0, 6, false);
+    const floor = add(new THREE.PlaneGeometry(60, 30), new THREE.MeshStandardMaterial({ color: '#cbb89a', roughness: 1 }), 0, -PL, 6, false);
     floor.rotation.x = -Math.PI / 2;
 
     rows.forEach((row, ri) => {
