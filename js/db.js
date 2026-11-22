@@ -39,7 +39,13 @@ export const db = {
   all: (s) => run(s, 'readonly', (os) => os.getAll()),
   get: (s, id) => run(s, 'readonly', (os) => os.get(id)),
   byBook: (s, bookId) => run(s, 'readonly', (os) => os.index('bookId').getAll(bookId)),
-  put: async (s, obj) => { await run(s, 'readwrite', (os) => os.put(obj)); return obj; },
+  // 화면용으로 붙인 임시 값(_로 시작하는 키: 관계도 선 요소 등)은 저장하지 않음
+  put: async (s, obj) => {
+    const clean = {};
+    for (const [k, v] of Object.entries(obj)) if (!k.startsWith('_')) clean[k] = v;
+    await run(s, 'readwrite', (os) => os.put(clean));
+    return obj;
+  },
   del: (s, id) => run(s, 'readwrite', (os) => os.delete(id)),
   clear: (s) => run(s, 'readwrite', (os) => os.clear()),
 
