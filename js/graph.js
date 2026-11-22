@@ -97,7 +97,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, zoomable
       .forEach((r) => {
         const k = [r.from, r.to].sort().join('|');
         const cur = byPair.get(k);
-        if (!cur || (r.page || 0) >= (cur.page || 0)) byPair.set(k, r);
+        // 같은 두 사람 사이에 관계가 여러 단계면 지금까지 드러난 것 중 가장 나중 것(장 → 쪽 순)
+        const later = !cur || (r.chapter || 0) > (cur.chapter || 0) || ((r.chapter || 0) === (cur.chapter || 0) && (r.page || 0) >= (cur.page || 0));
+        if (later) byPair.set(k, r);
       });
     edges = [...byPair.values()];
     build(page);
