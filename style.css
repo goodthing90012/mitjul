@@ -548,3 +548,8 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 /* 꾹 눌러 복사: 누르는 동안 살짝 눌린 느낌 */
 .q, .today-card { transition: transform .5s ease, background-color .5s ease; }
 .q.pressing, .today-card.pressing { transform: scale(.985); background-color: #fbf1dc; }
+/* 책장 정리: 칸별 표지/책등 */
+.so-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.so-head .sec { margin-bottom: 8px; }
+.mini-seg { width: auto; flex: none; }
+.mini-seg button { min-height: 36px; height: 36px; padding: 0 14px; font-size: 13px; }

@@ -432,7 +432,8 @@ export class Shelf {
     const rows = ROWS.map((r) => ({ ...r, books: books.filter((b) => (b.status || 'reading') === r.key) }));
     const items = rows.map((r) => r.books.map((b) => ({ b, dims: bookDims(b) })));
     // '읽는 중' 칸은 몇 권 안 되면 표지가 보이게 앞으로 세워 둠 (서점 진열처럼)
-    const faceOut = rows.map((r) => r.key === 'reading' && r.books.length > 0 && r.books.length <= 4);
+    // 칸마다 '표지 보이게'를 고를 수 있음 (책장 정리에서). 자리가 모자라면(5권 이상) 책등으로
+    const faceOut = rows.map((r) => !!this.faceOut?.[r.key] && r.books.length > 0 && r.books.length <= 4);
     const rowW = items.map((list, ri) => list.reduce((s, it) => s + (faceOut[ri] ? it.dims.d + 0.12 : it.dims.t) + gap, 0));
     const W = Math.max(6.5, Math.max(...rowW) + 1.4);
     const H = ROWS.length * ROW_H + BOARD;

@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.18.1';
+const APP_VERSION = '1.19.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -347,6 +347,15 @@ function sortBooks(books, lastQ = {}) {
   return [...books].sort(by);
 }
 
+// 칸마다 표지 보이게(앞으로 세우기) / 책등 보이게
+function getFaceOut() {
+  try { return { reading: true, ...JSON.parse(localStorage.getItem('faceOut') || '{}') }; } catch { return { reading: true }; }
+}
+function setFaceOut(key, on) {
+  const f = getFaceOut(); f[key] = on;
+  try { localStorage.setItem('faceOut', JSON.stringify(f)); } catch {}
+}
+
 async function shelfOrderSheet() {
   const quotes = await db.all('quotes');
   const lastQ = {};
@@ -362,7 +371,11 @@ async function shelfOrderSheet() {
       <p class="hint">${mode === 'manual' ? '▲▼로 칸 안에서 자리를 옮겨요.' : '▲▼를 누르면 <b>내가 정한 순서</b>로 바뀌어요.'} 칸(읽는 중·다 읽은·읽을)을 옮기려면 책을 열어 상태를 바꾸세요.</p>
       ${rows.map(([key, label]) => {
         const list = books.filter((b) => (b.status || 'reading') === key);
-        return `<h4 class="sec">${label} <small>${list.length}권</small></h4>${list.map((b, i) => `<div class="so-row" data-id="${b.id}">
+        const fo = !!getFaceOut()[key];
+        return `<div class="so-head"><h4 class="sec">${label} <small>${list.length}권</small></h4>
+          <div class="seg mini-seg" data-fo="${key}"><button type="button" data-v="1" class="${fo ? 'on' : ''}">표지</button><button type="button" data-v="0" class="${fo ? '' : 'on'}">책등</button></div></div>
+          ${fo && list.length > 4 ? '<p class="hint small">5권부터는 자리가 모자라서 책등으로 꽂혀요.</p>' : ''}
+          ${list.map((b, i) => `<div class="so-row" data-id="${b.id}">
           <i class="so-spine" style="background:${colorOf(b.id) || bookColor(b.id + b.title)}"></i>
           <div class="so-t"><b>${esc(b.title)}</b><small>${esc((b.authors || []).join(', '))}</small></div>
           <button class="mini" data-mv="-1" ${i === 0 ? 'disabled' : ''} aria-label="위로">▲</button>
@@ -370,6 +383,7 @@ async function shelfOrderSheet() {
         </div>`).join('') || '<div class="empty small">비어 있어요</div>'}`;
       }).join('')}`;
     $$('#soMode button', body).forEach((b) => (b.onclick = async () => { setSort(b.dataset.k); draw(); await reloadShelf(); }));
+    $$('[data-fo] button', body).forEach((b) => (b.onclick = async () => { setFaceOut(b.parentElement.dataset.fo, b.dataset.v === '1'); draw(); await reloadShelf(); }));
     $$('.so-row [data-mv]', body).forEach((btn) => (btn.onclick = async () => {
       const id = btn.closest('.so-row').dataset.id;
       const cur = sortBooks(state.books, lastQ);
@@ -401,6 +415,7 @@ async function reloadShelf() {
   for (const q of quotes) (byBook[q.bookId] ||= []).push(q.page || 0);
   const lastQ = {};
   for (const q of quotes) lastQ[q.bookId] = Math.max(lastQ[q.bookId] || 0, q.updatedAt || q.createdAt || 0);
+  shelf.faceOut = getFaceOut();
   shelf.setBooks(sortBooks(state.books, lastQ).map((b) => ({ ...b, quotePages: (byBook[b.id] || []).sort((a, c) => a - c) })));
   state.shelfDirty = false;
   $('#emptyHint').hidden = state.books.length > 0;
