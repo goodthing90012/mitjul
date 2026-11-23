@@ -31,15 +31,20 @@ export function bookColor(seed) {
 
 // 표지 사진: 한 번 받은 그림과 뽑은 색은 기억 (책장을 다시 그려도 깜빡이지 않게)
 const coverCache = new Map(); // url → Promise<{ img, color } | null>
+// 카카오·구글 표지 서버는 다른 사이트(앱)가 그림을 3D로 읽는 걸 막아 둬서, 막히면 이미지 중계 서버(weserv)를 거쳐 다시 받음
+const viaProxy = (url) => `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}&w=480&output=jpg`;
+function tryImg(src) {
+  return new Promise((res) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => { try { res({ img, color: dominantColor(img) }); } catch { res(null); } }; // 색을 못 읽게 막힌 그림이면 null
+    img.onerror = () => res(null);
+    img.src = src;
+  });
+}
 function loadCover(url) {
   if (!coverCache.has(url)) {
-    coverCache.set(url, new Promise((res) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => { try { res({ img, color: dominantColor(img) }); } catch { res(null); } }; // 색을 못 읽게 막힌 그림이면 null
-      img.onerror = () => res(null);
-      img.src = url;
-    }));
+    coverCache.set(url, (async () => (url.startsWith('data:') || url.startsWith('/') ? null : await tryImg(viaProxy(url))) || (await tryImg(url)))());
   }
   return coverCache.get(url);
 }

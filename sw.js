@@ -1,11 +1,11 @@
 // 밑줄서재 서비스워커 — 업데이트할 때마다 VERSION을 올려주세요
-const VERSION = 'mitjul-v53';
+const VERSION = 'mitjul-v54';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/bookapi.js', './js/scanner.js', './js/ocr.js', './js/graph.js', './js/shelf3d.js', './js/peopletext.js',
   './icons/icon-192.png', './icons/icon-512.png',
 ];
-const CDN = /^https:\/\/(cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com)\//;
+const CDN = /^https:\/\/(cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com|images\.weserv\.nl)\//;
 const NO_CACHE = /^https:\/\/(www\.googleapis\.com|dapi\.kakao\.com)\//;
 
 self.addEventListener('install', (e) => {
