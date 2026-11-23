@@ -29,6 +29,48 @@ export function bookColor(seed) {
   return `hsl(${h % 360}, ${32 + ((h >> 9) % 28)}%, ${28 + ((h >> 17) % 22)}%)`;
 }
 
+// 표지 사진: 한 번 받은 그림과 뽑은 색은 기억 (책장을 다시 그려도 깜빡이지 않게)
+const coverCache = new Map(); // url → Promise<{ img, color } | null>
+function loadCover(url) {
+  if (!coverCache.has(url)) {
+    coverCache.set(url, new Promise((res) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { try { res({ img, color: dominantColor(img) }); } catch { res(null); } }; // 색을 못 읽게 막힌 그림이면 null
+      img.onerror = () => res(null);
+      img.src = url;
+    }));
+  }
+  return coverCache.get(url);
+}
+// 표지의 대표 색: 작게 줄여 비슷한 색끼리 묶고, 가장 많은 색(선명한 색에 가산점)
+function dominantColor(img) {
+  const S = 40;
+  const c = document.createElement('canvas'); c.width = S; c.height = S;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(img, 0, 0, S, S);
+  const d = x.getImageData(0, 0, S, S).data; // 막힌 그림이면 여기서 에러
+  const bins = new Map();
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i]; const g = d[i + 1]; const b = d[i + 2];
+    const mx = Math.max(r, g, b); const mn = Math.min(r, g, b);
+    const sat = mx ? (mx - mn) / mx : 0;
+    const key = (r >> 5) * 64 + (g >> 5) * 8 + (b >> 5);
+    const o = bins.get(key) || { n: 0, w: 0, r: 0, g: 0, b: 0 };
+    o.n++; o.w += 1 + sat * 1.5; o.r += r; o.g += g; o.b += b;
+    bins.set(key, o);
+  }
+  let best = null;
+  for (const o of bins.values()) if (!best || o.w > best.w) best = o;
+  const r = Math.round(best.r / best.n); const g = Math.round(best.g / best.n); const b = Math.round(best.b / best.n);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+function isLight(color) {
+  const m = color.match(/\d+/g); if (!m || !color.startsWith('rgb')) return false;
+  const [r, g, b] = m.map(Number);
+  return 0.299 * r + 0.587 * g + 0.114 * b > 165;
+}
+
 function bookDims(b) {
   const h0 = hash(b.id);
   return {
@@ -79,10 +121,11 @@ function spineCanvas(b, dims, color) {
   x.fillStyle = g; x.fillRect(0, 0, W, H);
   x.fillStyle = 'rgba(232,200,120,.85)';
   x.fillRect(0, 40, W, 6); x.fillRect(0, H - 46, W, 6);
+  const light = isLight(color);
   x.save();
   x.translate(W / 2, 90);
   x.rotate(Math.PI / 2);
-  x.fillStyle = '#f7f1e3';
+  x.fillStyle = light ? '#2a211b' : '#f7f1e3';
   const size = fitText(x, b.title, H - 330, Math.min(W * 0.55, 64), 700);
   x.font = `700 ${size}px Pretendard, sans-serif`;
   x.textBaseline = 'middle';
@@ -93,7 +136,7 @@ function spineCanvas(b, dims, color) {
     x.save();
     x.translate(W / 2, H - 200);
     x.rotate(Math.PI / 2);
-    x.fillStyle = 'rgba(247,241,227,.75)';
+    x.fillStyle = light ? 'rgba(42,33,27,.7)' : 'rgba(247,241,227,.75)';
     const s2 = fitText(x, author, 140, Math.min(W * 0.36, 34), 500);
     x.font = `500 ${s2}px Pretendard, sans-serif`;
     x.textBaseline = 'middle';
@@ -383,7 +426,9 @@ export class Shelf {
     const gap = 0.03;
     const rows = ROWS.map((r) => ({ ...r, books: books.filter((b) => (b.status || 'reading') === r.key) }));
     const items = rows.map((r) => r.books.map((b) => ({ b, dims: bookDims(b) })));
-    const rowW = items.map((list) => list.reduce((s, it) => s + it.dims.t + gap, 0));
+    // '읽는 중' 칸은 몇 권 안 되면 표지가 보이게 앞으로 세워 둠 (서점 진열처럼)
+    const faceOut = rows.map((r) => r.key === 'reading' && r.books.length > 0 && r.books.length <= 4);
+    const rowW = items.map((list, ri) => list.reduce((s, it) => s + (faceOut[ri] ? it.dims.d + 0.12 : it.dims.t) + gap, 0));
     const W = Math.max(6.5, Math.max(...rowW) + 1.4);
     const H = ROWS.length * ROW_H + BOARD;
     const firstSetup = !this._didFit;
@@ -431,11 +476,19 @@ export class Shelf {
         prevIdx = idx;
         assignedColors.set(b.id, BOOK_COLORS[idx]);
         const g = this._buildBook(b, dims, BOOK_COLORS[idx]);
-        g.position.set(x + dims.t / 2, base + dims.h / 2 + 0.002, CASE_D / 2 - dims.d / 2 - 0.06);
+        if (faceOut[ri]) {
+          // 앞표지(+x 면)가 정면을 보게 돌리고, 뒤로 살짝 기대게
+          g.rotation.set(0, -Math.PI / 2, 0);
+          g.rotateZ(-0.07);
+          g.position.set(x + 0.06 + dims.d / 2, base + dims.h / 2 + 0.03, CASE_D / 2 - dims.t / 2 - 0.45);
+          x += dims.d + 0.12 + gap;
+        } else {
+          g.position.set(x + dims.t / 2, base + dims.h / 2 + 0.002, CASE_D / 2 - dims.d / 2 - 0.06);
+          x += dims.t + gap;
+        }
         g.userData.home = { pos: g.position.clone(), quat: g.quaternion.clone() };
         this.scene.add(g);
         this.groups.set(b.id, g);
-        x += dims.t + gap;
       });
     });
 
@@ -490,15 +543,24 @@ export class Shelf {
       m.rotation.x = ((hash(b.id + i) % 9) - 4) * 0.02;
     });
 
-    // 표지 이미지 (CORS가 허용되는 이미지일 때만 텍스처로 쓸 수 있음)
+    // 표지 사진: 앞표지에 붙이고, 책등·표지 색은 사진의 대표 색으로 (사진을 못 읽으면 기본 색 그대로)
     if (b.cover) {
-      new THREE.TextureLoader().setCrossOrigin('anonymous').load(b.cover, (tex) => {
+      loadCover(b.cover).then((cv) => {
+        if (!cv || !g.parent) return;
+        const tex = new THREE.Texture(cv.img);
         tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        tex.needsUpdate = true;
         outerMat.map?.dispose();
         outerMat.map = tex;
         outerMat.needsUpdate = true;
+        coverMat.color.set(cv.color);
+        spineMat.map?.dispose();
+        spineMat.map = canvasTex(spineCanvas(b, dims, cv.color));
+        spineMat.needsUpdate = true;
+        assignedColors.set(b.id, cv.color);
         this.dirty = true;
-      }, undefined, () => {});
+      });
     }
     return g;
   }
