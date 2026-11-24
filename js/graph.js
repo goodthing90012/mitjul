@@ -212,27 +212,54 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
   /* ---- 스포트라이트: 톡 한 인물을 가운데, 이어진 사람을 둥글게, 관계 이름은 선 위에 겹치지 않게 ---- */
   let saved = null;   // 강조 전 자리 (풀면 되돌아감)
   let tween = 0;
+  // 확대/이동은 svg 전체를 GPU로 늘였다 줄이는 방식(글자를 매 순간 다시 그리지 않음): 목표 화면을 먼저 적용해 두고
+  // CSS 변환으로 시작 화면에서 목표 화면까지 이어줌. 끝나면 변환을 지우고 선명하게 한 번 다시 그림
+  let finishTween = null;
   function animateTo(targets, dur, viewTo, done) {
-    cancelAnimationFrame(tween);
+    finishTween?.(true);
     cancelAnimationFrame(raf); raf = 0;
     cancelAnimationFrame(fitAnim); fitAnim = 0;
     const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     const v0 = { ...view };
+    if (viewTo) { view = { ...viewTo }; applyView(); }
+    const css = (vi) => {
+      const sc = vi.k / view.k;
+      svg.style.transformOrigin = '0 0';
+      svg.style.transform = `translate3d(${vi.x - sc * view.x}px, ${vi.y - sc * view.y}px, 0) scale(${sc})`;
+    };
     let t0 = 0;
-    // 움직이는 동안엔 관계 이름을 살짝 감췄다가 멈추면 다시 (글자 다시 그리는 부담을 줄여 훨씬 매끄럽게)
     gLabels.style.opacity = '0';
     labelsOff = true;
     svg.classList.add('anim');
+    svg.style.willChange = 'transform';
+    const finish = (skip) => {
+      cancelAnimationFrame(tween); tween = 0; finishTween = null;
+      if (skip) for (const [n, t] of targets) { n.x = t.x; n.y = t.y; }
+      if (viewTo) { svg.style.transform = ''; }
+      if (!zoomable) svg.style.willChange = '';
+      labelsOff = false; placeLabels(); draw();
+      svg.classList.remove('anim'); gLabels.style.opacity = '';
+      done?.();
+    };
+    finishTween = finish;
     const step = (now) => {
       if (!t0) t0 = now;
       const p = Math.min(1, (now - t0) / dur);
       const e = 1 - Math.pow(1 - p, 5); // 빠르게 출발해서 아주 천천히 멈춤
-
       for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
-      if (viewTo) { view = { k: v0.k + (viewTo.k - v0.k) * e, x: v0.x + (viewTo.x - v0.x) * e, y: v0.y + (viewTo.y - v0.y) * e }; applyView(); }
-      draw(); // 관계 이름 자리 계산은 끝나고 한 번만
+      if (viewTo) {
+        // 배율은 곱셈으로 이어야 확대·축소 속도가 고르게 느껴짐
+        const k = v0.k * Math.pow(viewTo.k / v0.k, e);
+        // 화면 가운데 기준으로 같은 비율로 이동
+        const { w, h } = size();
+        const c0 = { x: (w / 2 - v0.x) / v0.k, y: (h / 2 - v0.y) / v0.k };
+        const c1 = { x: (w / 2 - viewTo.x) / viewTo.k, y: (h / 2 - viewTo.y) / viewTo.k };
+        const cx = c0.x + (c1.x - c0.x) * e; const cy = c0.y + (c1.y - c0.y) * e;
+        css({ k, x: w / 2 - cx * k, y: h / 2 - cy * k });
+      }
+      draw();
       if (p < 1) tween = requestAnimationFrame(step);
-      else { tween = 0; labelsOff = false; placeLabels(); draw(); svg.classList.remove('anim'); gLabels.style.opacity = ''; done?.(); }
+      else finish(false);
     };
     tween = requestAnimationFrame(step);
   }
@@ -361,6 +388,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     const hideTemp = () => { tempLine.setAttribute('visibility', 'hidden'); tempRing.setAttribute('visibility', 'hidden'); };
     n._g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
+      finishTween?.(true); // 움직이는 중이면 바로 끝내서 손가락 위치가 정확하게
       n._g.setPointerCapture(e.pointerId);
       const pt = toLocal(e);
       start = { dx: n.x - pt.x, dy: n.y - pt.y, x: pt.x, y: pt.y };
@@ -422,6 +450,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
   let inertia = 0;
   let wheelAnim = 0;
   const beginGesture = () => {
+    finishTween?.(true);
     cancelAnimationFrame(fitAnim);
     autoFit = false;
     if (gest) return;
@@ -771,6 +800,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     fit: () => { if (focus) setFocus(null); else fit(true); }, // 전체 보기 = 강조 풀고 전체 맞춤
     focusOn: (id) => { if (nodes.has(id)) { if (focus === id) fit(true); else setFocus(id); return true; } return false; }, // 검색 결과로 이동
     clearFocus: () => { if (focus) setFocus(null); },
-    destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
+    destroy: () => { finishTween = null; cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
   };
 }
