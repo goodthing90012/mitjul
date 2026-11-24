@@ -221,6 +221,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     let t0 = 0;
     // 움직이는 동안엔 관계 이름을 살짝 감췄다가 멈추면 다시 (글자 다시 그리는 부담을 줄여 훨씬 매끄럽게)
     gLabels.style.opacity = '0';
+    labelsOff = true;
     svg.classList.add('anim');
     const step = (now) => {
       if (!t0) t0 = now;
@@ -231,7 +232,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       if (viewTo) { view = { k: v0.k + (viewTo.k - v0.k) * e, x: v0.x + (viewTo.x - v0.x) * e, y: v0.y + (viewTo.y - v0.y) * e }; applyView(); }
       draw(); // 관계 이름 자리 계산은 끝나고 한 번만
       if (p < 1) tween = requestAnimationFrame(step);
-      else { tween = 0; placeLabels(); draw(); svg.classList.remove('anim'); gLabels.style.opacity = ''; done?.(); }
+      else { tween = 0; labelsOff = false; placeLabels(); draw(); svg.classList.remove('anim'); gLabels.style.opacity = ''; done?.(); }
     };
     tween = requestAnimationFrame(step);
   }
@@ -342,6 +343,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     }
     return best;
   }
+  let dragFrame = 0;
   function bindNode(n) {
     let start = null;
     let moved = 0;
@@ -385,8 +387,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       if (moved < 6) return;
       clearTimeout(timer);
       n.x = nx; n.y = ny;
-      alpha = Math.max(alpha, 0.25);
-      kick();
+      // 끄는 동안엔 잡은 인물만 손가락을 따라감 (나머지는 놓았을 때 부드럽게 정리)
+      if (!dragFrame) dragFrame = requestAnimationFrame(() => { dragFrame = 0; draw(); });
     });
     const up = (e) => {
       if (!start) return;
@@ -404,7 +406,10 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       if (moved < 6) {
         if (focus === n.p.id) onNodeTap?.(n.p);
         else setFocus(n.p.id);
-      }
+      } else if (!focus) {
+        // 놓은 자리는 그대로 두고 주변만 정리
+        n.fixed = true; alpha = 0.3; relax(550); n.fixed = false;
+      } else { placeLabels(); draw(); }
     };
     n._g.addEventListener('pointerup', up);
     n._g.addEventListener('pointercancel', () => { clearTimeout(timer); start = null; n.fixed = false; linking = false; hideTemp(); n._g.classList.remove('linking'); });
@@ -421,8 +426,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     autoFit = false;
     if (gest) return;
     gest = { v0: { ...view }, r0: svg.getBoundingClientRect() };
-    svg.style.transformOrigin = '0 0';
-    svg.style.willChange = 'transform';
   };
   const renderGesture = () => {
     if (frame) return;
@@ -438,7 +441,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     cancelAnimationFrame(frame); frame = 0;
     applyView();
     svg.style.transform = '';
-    svg.style.willChange = '';
     gest = null;
   };
   const stopInertia = () => { cancelAnimationFrame(inertia); inertia = 0; };
@@ -711,12 +713,13 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     step();
   }
 
+  let labelsOff = false; // 애니메이션 중엔 관계 이름을 감추고 다시 그리지 않음
   function draw() {
     for (const e of edges) {
       const a = nodes.get(e.from); const b = nodes.get(e.to);
       e._line.setAttribute('x1', a.x); e._line.setAttribute('y1', a.y);
       e._line.setAttribute('x2', b.x); e._line.setAttribute('y2', b.y);
-      if (e._lg) {
+      if (e._lg && !labelsOff) {
         let mx = (a.x + b.x) / 2; let my = (a.y + b.y) / 2;
         if (e._t != null) {
           const f = e._from === b.p.id ? b : a; const o = f === a ? b : a;
@@ -733,23 +736,35 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     for (const n of nodes.values()) n._g.setAttribute('transform', `translate(${n.x},${n.y})`);
   }
 
+  // 배치 바꾸기: 물리 계산을 화면 밖에서 끝까지 돌려 최종 자리를 구하고, 그 자리로 한 번에 미끄러지듯 이동
+  // (화면에서 꿈틀거리며 자리 잡는 모습 대신)
+  function relax(dur = 650) {
+    const start = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    alpha = Math.max(alpha, 0.05);
+    for (let i = 0; i < 420 && alpha > 0.02; i++) tick();
+    separate(40);
+    placeLabels();
+    for (let round = 0; round < 4 && growHidden(); round++) {
+      alpha = 0.3;
+      for (let i = 0; i < 60; i++) tick();
+      separate(30);
+      placeLabels();
+    }
+    alpha = 0;
+    const targets = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
+    const moved = [...targets].some(([n, t]) => Math.hypot(t.x - start.get(n).x, t.y - start.get(n).y) > 0.5);
+    for (const [n, p] of start) { n.x = p.x; n.y = p.y; }
+    const viewTo = autoFit && !gest ? fitTargetFor(targets, null) : null;
+    if (!moved) { for (const [n, t] of targets) { n.x = t.x; n.y = t.y; } placeLabels(); draw(); if (viewTo) fit(true); return; }
+    animateTo(targets, dur, viewTo);
+  }
   function kick() {
-    if (raf || tween) return;
+    if (tween) return;
     if (focus) { placeLabels(); draw(); return; } // 강조 중엔 배치를 흔들지 않음
-    const loop = () => {
-      tick();
-      draw();
-      if (alpha > 0.02) raf = requestAnimationFrame(loop);
-      else {
-        raf = 0; placeLabels(); draw();
-        // 숨은 관계 이름이 있으면 그 선을 조금 늘려서 한 번 더 (부드럽게)
-        if (!focus && settleHidden()) return;
-        if (autoFit && !gest) fit(true);
-      } // 멈추면 관계 이름 자리 다시 잡기 (+ 전체 보기 상태면 다시 맞춤)
-    };
-    raf = requestAnimationFrame(loop);
+    relax();
   }
 
+  if (zoomable) { svg.style.transformOrigin = '0 0'; svg.style.willChange = 'transform'; } // 미리 GPU 층으로 (끌기 시작할 때 첫 프레임 끊김 방지)
   applyView();
   return {
     setData,
