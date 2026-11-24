@@ -1,5 +1,5 @@
 // 밑줄서재 서비스워커 — 업데이트할 때마다 VERSION을 올려주세요
-const VERSION = 'mitjul-v59';
+const VERSION = 'mitjul-v60';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/bookapi.js', './js/scanner.js', './js/ocr.js', './js/graph.js', './js/shelf3d.js', './js/peopletext.js',

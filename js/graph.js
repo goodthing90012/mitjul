@@ -54,6 +54,16 @@ function splitLabel(t) {
   const c = Math.ceil(mid); return [t.slice(0, c), t.slice(c)];
 }
 
+// cubic-bezier(.33, 0, .15, 1): 살며시 출발해서 길게 감속 (첫 프레임이 살짝 밀려도 튀어 보이지 않음)
+function ease(t) {
+  const x1 = 0.33; const y1 = 0; const x2 = 0.15; const y2 = 1;
+  const bx = (u) => 3 * x1 * u * (1 - u) ** 2 + 3 * x2 * u * u * (1 - u) + u ** 3;
+  const by = (u) => 3 * y1 * u * (1 - u) ** 2 + 3 * y2 * u * u * (1 - u) + u ** 3;
+  let lo = 0; let hi = 1; let u = t;
+  for (let i = 0; i < 20; i++) { u = (lo + hi) / 2; if (bx(u) < t) lo = u; else hi = u; }
+  return by(u);
+}
+
 export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
@@ -192,7 +202,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
   }
 
   // 강조: 고른 인물과 이어진 것만 진하게. 관계 이름은 겹치지 않게 톡 한 인물의 것만 보여줌
-  function styleFocus() {
+  function styleFocus(noLabels) {
     const near = new Set();
     if (focus) {
       near.add(focus);
@@ -206,7 +216,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.22);
       n._g.classList.toggle('focused', n.p.id === focus);
     }
-    placeLabels();
+    if (!noLabels) placeLabels();
   }
 
   /* ---- 스포트라이트: 톡 한 인물을 가운데, 이어진 사람을 둥글게, 관계 이름은 선 위에 겹치지 않게 ---- */
@@ -236,7 +246,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       cancelAnimationFrame(tween); tween = 0; finishTween = null;
       if (skip) for (const [n, t] of targets) { n.x = t.x; n.y = t.y; }
       if (viewTo) { svg.style.transform = ''; }
-      if (!zoomable) svg.style.willChange = '';
       labelsOff = false; placeLabels(); draw();
       svg.classList.remove('anim'); gLabels.style.opacity = '';
       done?.();
@@ -245,7 +254,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     const step = (now) => {
       if (!t0) t0 = now;
       const p = Math.min(1, (now - t0) / dur);
-      const e = 1 - Math.pow(1 - p, 5); // 빠르게 출발해서 아주 천천히 멈춤
+      const e = ease(p); // 살며시 출발 → 아주 천천히 멈춤
       for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
       if (viewTo) {
         // 배율은 곱셈으로 이어야 확대·축소 속도가 고르게 느껴짐
@@ -268,7 +277,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     stopInertia(); commitGesture(); // 톡 직후 남은 이동 상태를 먼저 정리
     if (!id) {
       focus = null;
-      styleFocus();
+      styleFocus(true); // 관계 이름 자리는 애니메이션 끝나고 한 번만
       if (saved) {
         const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
         saved = null;
@@ -279,7 +288,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     }
     if (!saved) saved = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     focus = id;
-    styleFocus();
+    styleFocus(true); // 관계 이름 자리는 애니메이션 끝나고 한 번만
     const c = nodes.get(id);
     const center = saved.get(c);
     const mine = edges.filter((e) => e.from === id || e.to === id);
@@ -793,7 +802,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     relax();
   }
 
-  if (zoomable) { svg.style.transformOrigin = '0 0'; svg.style.willChange = 'transform'; } // 미리 GPU 층으로 (끌기 시작할 때 첫 프레임 끊김 방지)
+  svg.style.transformOrigin = '0 0'; svg.style.willChange = 'transform'; // 미리 GPU 층으로 (애니메이션·끌기 첫 프레임 끊김 방지)
   applyView();
   return {
     setData,

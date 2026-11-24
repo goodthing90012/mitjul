@@ -572,3 +572,11 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .gs-card:empty { display: none; }
 .gs-card { margin-top: 8px; }
 .gs-card .pcard { cursor: pointer; }
+/* 작은 관계도: 위에 늘 있는 검색칸 */
+.gsearch.inline { position: static; margin: 4px 0 8px; }
+.gsearch.inline .gs-bar input { box-shadow: none; height: 48px; min-height: 48px; border-radius: 14px; }
+.gsearch.inline .gs-x { height: 48px; min-height: 48px; width: 48px; border-radius: 14px; }
+.gsearch.inline .gs-x[hidden] { display: none; }
+.gsearch.inline .gs-list:empty { display: none; }
+.gsearch.inline .gs-item, .gsearch.inline .gs-hidden, .gsearch.inline .gs-none { box-shadow: none; }
+.gsearch.inline + .gs-card { margin: 0 0 8px; }

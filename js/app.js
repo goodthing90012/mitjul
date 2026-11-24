@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.21.0';
+const APP_VERSION = '1.21.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -851,7 +851,7 @@ function renderPeople() {
   body.innerHTML = `
     ${tools}
     ${chapterBar}
-    <div class="graph-box"><svg id="graphSvg"></svg><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
+    <div class="graph-box"><svg id="graphSvg"></svg><div class="graph-tools"><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
     <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
@@ -880,7 +880,7 @@ function renderPeople() {
   state.graph = createGraph($('#graphSvg'), graphHandlers());
   state.graph.setData(people, relations, page);
   $('#graphExpand').onclick = () => graphSheet(maxP);
-  attachGraphSearch($('#graphSvg').parentElement, () => state.graph);
+  attachGraphSearch($('#graphSvg').parentElement, () => state.graph, null, true);
 
   const slider = $('#pageSlider');
   slider.oninput = () => {
@@ -910,16 +910,17 @@ function renderPeople() {
 // 이름 찾기: 보이는 인물 + 가려진 인물(책에서 그 이름을 만났을 때 열 수 있게)
 // 관계도 안 검색 (인물 찾기는 여기 하나로): 🔍 → 검색창. 고르면 관계도에서 가운데로 모으고 관계도 아래에 그 사람 카드.
 // 아직 안 만난(가려진) 인물 이름이면 '만났어요'로 바로 열 수 있음. 관계도는 검색 중에도 계속 움직일 수 있음
-function attachGraphSearch(box, getGraph, onChange) {
+// inline = 작은 관계도: 관계도 위에 늘 있는 검색칸 (결과·카드도 관계도 위라 관계도를 가리지 않음)
+// 크게 보기: 🔍 누르면 관계도 위에 펼쳐지는 검색창
+function attachGraphSearch(box, getGraph, onChange, inline) {
   const btn = $('.gs-open', box);
   const panel = document.createElement('div');
-  panel.className = 'gsearch';
-  panel.hidden = true;
-  panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이 이름 누구지? 애칭·호칭·성으로도" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="닫기">✕</button></div><div class="gs-list"></div>`;
-  box.append(panel);
+  panel.className = inline ? 'gsearch inline' : 'gsearch';
+  panel.hidden = !inline;
+  panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="지우기" ${inline ? 'hidden' : ''}>✕</button></div><div class="gs-list"></div>`;
   const card = document.createElement('div');
   card.className = 'gs-card';
-  box.after(card);
+  if (inline) { box.before(panel); panel.after(card); } else { box.append(panel); box.after(card); }
   const inp = $('input', panel); const list = $('.gs-list', panel);
   let res = [];
   const page = () => state.graphPage ?? 99999;
@@ -957,11 +958,11 @@ function attachGraphSearch(box, getGraph, onChange) {
       if (p) setTimeout(() => getGraph()?.focusOn(id), 300);
     }));
   };
-  const close = () => { panel.hidden = true; box.classList.remove('searching'); inp.value = ''; list.innerHTML = ''; card.innerHTML = ''; };
-  inp.oninput = show;
+  const close = () => { panel.hidden = !inline; box.classList.remove('searching'); inp.value = ''; list.innerHTML = ''; card.innerHTML = ''; if (inline) $('.gs-x', panel).hidden = true; };
+  inp.oninput = () => { if (inline) $('.gs-x', panel).hidden = !inp.value; if (!inp.value) { card.innerHTML = ''; getGraph()?.clearFocus(); } show(); };
   inp.onkeydown = (e) => { if (e.key === 'Enter' && res[0]) { e.preventDefault(); pick(res[0]); } };
   inp.onfocus = show;
-  btn.onclick = () => { panel.hidden = false; box.classList.add('searching'); inp.focus(); };
+  if (btn) btn.onclick = () => { panel.hidden = false; box.classList.add('searching'); inp.focus(); };
   $('.gs-x', panel).onclick = () => { close(); getGraph()?.clearFocus(); };
 }
 
