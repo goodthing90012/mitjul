@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.19.1';
+const APP_VERSION = '1.20.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -855,7 +855,7 @@ function renderPeople() {
       <input id="nameFind" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off">
       <div id="findOut"></div>
     </div>
-    <div class="graph-box"><svg id="graphSvg"></svg><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div>
+    <div class="graph-box"><svg id="graphSvg"></svg><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
     <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
@@ -884,6 +884,7 @@ function renderPeople() {
   state.graph = createGraph($('#graphSvg'), graphHandlers());
   state.graph.setData(people, relations, page);
   $('#graphExpand').onclick = () => graphSheet(maxP);
+  attachGraphSearch($('#graphSvg').parentElement, () => state.graph);
 
   const slider = $('#pageSlider');
   slider.oninput = () => {
@@ -912,6 +913,36 @@ function renderPeople() {
 }
 
 // 이름 찾기: 보이는 인물 + 가려진 인물(책에서 그 이름을 만났을 때 열 수 있게)
+// 관계도 안 검색: 🔍 누르면 위에 검색창이 펼쳐지고, 고른 인물을 가운데로 모아 보여줌 (관계도는 계속 움직일 수 있음)
+function attachGraphSearch(box, getGraph) {
+  const btn = $('.gs-open', box);
+  const panel = document.createElement('div');
+  panel.className = 'gsearch';
+  panel.hidden = true;
+  panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이름·애칭·호칭으로 찾기" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="닫기">✕</button></div><div class="gs-list"></div>`;
+  box.append(panel);
+  const inp = $('input', panel); const list = $('.gs-list', panel);
+  let res = [];
+  const pick = (p) => {
+    inp.blur(); // 키보드 내려서 관계도가 보이게
+    list.innerHTML = '';
+    if (!getGraph()?.focusOn(p.id)) toast('지금 쪽까지는 관계도에 없는 인물이에요');
+  };
+  const show = () => {
+    const q = inp.value.trim();
+    res = q ? findPeople(q, state.graphPage ?? 99999).slice(0, 6) : [];
+    list.innerHTML = q
+      ? res.map(({ p, hit }, i) => `<button type="button" class="gs-item" data-i="${i}"><b>${esc(p.name)}</b>${hit && hit.kind !== '대표 이름' ? `<small>${esc(hit.name)} · ${esc(hit.kind)}</small>` : ''}</button>`).join('') || '<div class="gs-none">이 쪽까지는 그런 이름이 없어요</div>'
+      : '';
+    $$('.gs-item', list).forEach((b) => (b.onclick = () => pick(res[+b.dataset.i].p)));
+  };
+  inp.oninput = show;
+  inp.onkeydown = (e) => { if (e.key === 'Enter' && res[0]) { e.preventDefault(); pick(res[0].p); } };
+  inp.onfocus = show;
+  btn.onclick = () => { panel.hidden = false; box.classList.add('searching'); inp.focus(); };
+  $('.gs-x', panel).onclick = () => { panel.hidden = true; box.classList.remove('searching'); inp.value = ''; list.innerHTML = ''; getGraph()?.clearFocus(); };
+}
+
 function bindFinder() {
   const find = $('#nameFind');
   if (!find) return;
@@ -974,7 +1005,7 @@ function graphSheet(maxP) {
   let g = null;
   const body = openSheet(`
     <h3>인물 관계도</h3>
-    <div class="graph-box big"><svg id="graphBig"></svg><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div>
+    <div class="graph-box big"><svg id="graphBig"></svg><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div></div>
     <p class="graph-tip">두 손가락으로 확대 · 빈 곳을 끌어 이동 · 톡 = 관계 보기, 한 번 더 = 편집 · 길게 눌러 끌기 = 잇기</p>
     <div class="slider">
       <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>
@@ -991,6 +1022,7 @@ function graphSheet(maxP) {
     g.setData(people, relations, state.graphPage);
     bindSpoilerBox($('#bigSpoil', body), refresh);
     $('#graphFit', body).onclick = () => g.fit();
+    attachGraphSearch($('#graphBig', body).parentElement, () => g);
   });
   const sl = $('#bigSlider', body);
   sl.oninput = () => {

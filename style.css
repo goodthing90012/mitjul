@@ -553,3 +553,18 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .so-head .sec { margin-bottom: 8px; }
 .mini-seg { width: auto; flex: none; }
 .mini-seg button { min-height: 36px; height: 36px; padding: 0 14px; font-size: 13px; }
+/* 관계도 안 검색 */
+.graph-tools { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; z-index: 2; }
+.graph-tools .graph-expand { position: static; }
+.graph-icon { width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 17px; border: 0; background: rgba(43,38,34,.85); color: var(--paper); display: inline-flex; align-items: center; justify-content: center; }
+.graph-icon svg { width: 18px; height: 18px; }
+.graph-box.searching .graph-tools { display: none; }
+.gsearch { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 3; }
+.gsearch[hidden] { display: none; }
+.gs-bar { display: flex; gap: 6px; }
+.gs-bar input { flex: 1; height: 42px; min-height: 42px; border-radius: 21px; padding: 0 16px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 4px 14px rgba(0,0,0,.12); font-size: 15px; }
+.gs-x { width: 42px; height: 42px; min-height: 42px; padding: 0; border-radius: 21px; border: 0; background: rgba(43,38,34,.85); color: var(--paper); font-size: 15px; flex: none; }
+.gs-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+.gs-item { min-height: 36px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 2px 8px rgba(0,0,0,.1); font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
+.gs-item small { color: var(--muted); font-weight: 400; }
+.gs-none { font-size: 13px; color: var(--muted); background: rgba(255,250,240,.92); padding: 6px 12px; border-radius: 12px; }

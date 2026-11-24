@@ -769,6 +769,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
   return {
     setData,
     fit: () => { if (focus) setFocus(null); else fit(true); }, // 전체 보기 = 강조 풀고 전체 맞춤
+    focusOn: (id) => { if (nodes.has(id)) { if (focus === id) fit(true); else setFocus(id); return true; } return false; }, // 검색 결과로 이동
+    clearFocus: () => { if (focus) setFocus(null); },
     destroy: () => { cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
   };
 }
