@@ -568,3 +568,7 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .gs-item { min-height: 36px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 2px 8px rgba(0,0,0,.1); font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
 .gs-item small { color: var(--muted); font-weight: 400; }
 .gs-none { font-size: 13px; color: var(--muted); background: rgba(255,250,240,.92); padding: 6px 12px; border-radius: 12px; }
+.gs-hidden { font-size: 13px; background: rgba(255,250,240,.95); padding: 6px 8px 6px 12px; border-radius: 14px; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+.gs-card:empty { display: none; }
+.gs-card { margin-top: 8px; }
+.gs-card .pcard { cursor: pointer; }

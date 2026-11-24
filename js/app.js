@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.20.1';
+const APP_VERSION = '1.21.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -851,10 +851,6 @@ function renderPeople() {
   body.innerHTML = `
     ${tools}
     ${chapterBar}
-    <div class="finder">
-      <input id="nameFind" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off">
-      <div id="findOut"></div>
-    </div>
     <div class="graph-box"><svg id="graphSvg"></svg><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
     <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
@@ -893,7 +889,6 @@ function renderPeople() {
     state.graph.setData(people, relations, +slider.value);
   };
   slider.onchange = () => renderPeople();
-  bindFinder();
   bindHidden();
   if (sel) {
     // 선택 모드: 카드 누르면 체크, 아래 버튼으로 삭제
@@ -913,34 +908,61 @@ function renderPeople() {
 }
 
 // 이름 찾기: 보이는 인물 + 가려진 인물(책에서 그 이름을 만났을 때 열 수 있게)
-// 관계도 안 검색: 🔍 누르면 위에 검색창이 펼쳐지고, 고른 인물을 가운데로 모아 보여줌 (관계도는 계속 움직일 수 있음)
-function attachGraphSearch(box, getGraph) {
+// 관계도 안 검색 (인물 찾기는 여기 하나로): 🔍 → 검색창. 고르면 관계도에서 가운데로 모으고 관계도 아래에 그 사람 카드.
+// 아직 안 만난(가려진) 인물 이름이면 '만났어요'로 바로 열 수 있음. 관계도는 검색 중에도 계속 움직일 수 있음
+function attachGraphSearch(box, getGraph, onChange) {
   const btn = $('.gs-open', box);
   const panel = document.createElement('div');
   panel.className = 'gsearch';
   panel.hidden = true;
-  panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이름·애칭·호칭으로 찾기" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="닫기">✕</button></div><div class="gs-list"></div>`;
+  panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이 이름 누구지? 애칭·호칭·성으로도" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="닫기">✕</button></div><div class="gs-list"></div>`;
   box.append(panel);
+  const card = document.createElement('div');
+  card.className = 'gs-card';
+  box.after(card);
   const inp = $('input', panel); const list = $('.gs-list', panel);
   let res = [];
-  const pick = (p) => {
+  const page = () => state.graphPage ?? 99999;
+  const showCard = (p, hit) => {
+    card.innerHTML = personCard(p, page(), hit);
+    $('.pcard', card).onclick = () => personSheet(p);
+  };
+  const pick = ({ p, hit }) => {
     inp.blur(); // 키보드 내려서 관계도가 보이게
     list.innerHTML = '';
-    if (!getGraph()?.focusOn(p.id)) toast('지금 쪽까지는 관계도에 없는 인물이에요');
+    showCard(p, hit);
+    if (!getGraph()?.focusOn(p.id)) toast('이 인물은 아직 관계가 없어서 관계도엔 안 보여요');
+  };
+  const hiddenHits = (q) => {
+    const nq = normalizeName(q);
+    if (nq.length < 2) return [];
+    return (state.current.hiddenPeople || []).filter((p) => [p.name, ...(p.aliases || []).map((a) => a.name)].some((n) => { const x = normalizeName(n); return x === nq || x.split(' ').includes(nq) || (nq.length >= 3 && x.includes(nq)); }));
   };
   const show = () => {
     const q = inp.value.trim();
-    res = q ? findPeople(q, state.graphPage ?? 99999).slice(0, 6) : [];
+    res = q ? findPeople(q, page()).slice(0, 6) : [];
+    const hid = q ? hiddenHits(q) : [];
     list.innerHTML = q
-      ? res.map(({ p, hit }, i) => `<button type="button" class="gs-item" data-i="${i}"><b>${esc(p.name)}</b>${hit && hit.kind !== '대표 이름' ? `<small>${esc(hit.name)} · ${esc(hit.kind)}</small>` : ''}</button>`).join('') || '<div class="gs-none">이 쪽까지는 그런 이름이 없어요</div>'
+      ? res.map(({ p, hit }, i) => `<button type="button" class="gs-item" data-i="${i}"><b>${esc(p.name)}</b>${hit && hit.kind !== '대표 이름' ? `<small>${esc(hit.name)} · ${esc(hit.kind)}</small>` : ''}</button>`).join('') +
+        hid.map((p) => `<div class="gs-hidden">‘${esc(q)}’은(는) 아직 안 만난 인물이에요 <button type="button" class="mini" data-reveal="${p.id}">만났어요</button></div>`).join('') ||
+        '<div class="gs-none">이 쪽까지는 그런 이름이 없어요</div>'
       : '';
-    $$('.gs-item', list).forEach((b) => (b.onclick = () => pick(res[+b.dataset.i].p)));
+    $$('.gs-item', list).forEach((b) => (b.onclick = () => pick(res[+b.dataset.i])));
+    $$('[data-reveal]', list).forEach((b) => (b.onclick = async () => {
+      const id = b.dataset.reveal;
+      close();
+      await revealPerson(id);
+      onChange?.();
+      const p = state.current.people.find((x) => x.id === id);
+      if (p) setTimeout(() => getGraph()?.focusOn(id), 300);
+    }));
   };
+  const close = () => { panel.hidden = true; box.classList.remove('searching'); inp.value = ''; list.innerHTML = ''; card.innerHTML = ''; };
   inp.oninput = show;
-  inp.onkeydown = (e) => { if (e.key === 'Enter' && res[0]) { e.preventDefault(); pick(res[0].p); } };
+  inp.onkeydown = (e) => { if (e.key === 'Enter' && res[0]) { e.preventDefault(); pick(res[0]); } };
   inp.onfocus = show;
   btn.onclick = () => { panel.hidden = false; box.classList.add('searching'); inp.focus(); };
-  $('.gs-x', panel).onclick = () => { panel.hidden = true; box.classList.remove('searching'); inp.value = ''; list.innerHTML = ''; getGraph()?.clearFocus(); };
+  $('.gs-x', panel).onclick = () => { close(); getGraph()?.clearFocus(); };
 }
 
 function bindFinder() {
@@ -1022,7 +1044,7 @@ function graphSheet(maxP) {
     g.setData(people, relations, state.graphPage);
     bindSpoilerBox($('#bigSpoil', body), refresh);
     $('#graphFit', body).onclick = () => g.fit();
-    attachGraphSearch($('#graphBig', body).parentElement, () => g);
+    attachGraphSearch($('#graphBig', body).parentElement, () => g, refresh);
   });
   const sl = $('#bigSlider', body);
   sl.oninput = () => {
