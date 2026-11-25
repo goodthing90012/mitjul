@@ -57,6 +57,9 @@ function ease(t) {
   return by(u);
 }
 
+const onIdle = (f) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 200 }) : setTimeout(f, 16));
+const cancelIdle = (id) => (window.cancelIdleCallback ? cancelIdleCallback(id) : clearTimeout(id));
+
 /* 캔버스 관계도
    - 인물(원·이름·별칭)과 관계 이름은 처음에 한 번 작은 그림(스프라이트)으로 구워두고, 매 프레임엔 붙이기만 함
    - 확대 배율이 많이 바뀌면 멈춘 뒤에 그 배율로 다시 구워서 선명하게
@@ -77,7 +80,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
   const size = () => ({ w: W, h: H });
   const resize = () => {
     const w = canvas.clientWidth || 360; const h = canvas.clientHeight || 300;
-    const d = Math.min(3, devicePixelRatio || 1);
+    const d = Math.min(2, devicePixelRatio || 1); // 3배 화면도 2배로 (눈엔 거의 같고 그리는 양은 절반 가까이)
     if (w === W && h === H && d === dpr && canvas.width) return false;
     W = w; H = h; dpr = d;
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
@@ -93,7 +96,8 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
   let rq = 0;
   const requestRender = () => { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); };
   let bakeS = 0; // 스프라이트를 구운 배율 (그래프 1 = 픽셀 몇 개)
-  const wantS = () => { const s = Math.max(1, Math.min(6, view.k * dpr)); return Math.pow(2, Math.round(Math.log2(s) * 2) / 2); };
+  // 이름표는 항상 '확대된 모습' 기준(최소 1.6배)으로 구워둠 → 확대 애니메이션 중에도 흐려지지 않음 (작게 볼 땐 줄여서 그림)
+  const wantS = () => { const s = Math.max(1.6 * dpr, Math.min(6, view.k * dpr)); return Math.pow(2, Math.ceil(Math.log2(s) * 2) / 2); };
   let labelFade = 1; // 관계 이름 투명도 (애니메이션 끝나면 0→1)
   let temp = null;   // 잇기 중 임시 선 { from, x, y, target }
   let page = 0;
@@ -140,12 +144,21 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     e._rows.forEach((r, i) => x.fillText(r, 0, (i - (e._rows.length - 1) / 2) * 13 + 0.5));
     e._spr = { c, w, h };
   }
-  function bakeAll() {
+  // force = 지금 바로 전부 (데이터가 바뀔 때). 아니면 더 크게 확대했을 때만, 몇 개씩 나눠 쉬는 틈에 (멈칫 방지)
+  let bakeJob = 0;
+  function bakeAll(force) {
     const S = wantS();
-    if (S === bakeS) return;
+    if (!force && S <= bakeS) return; // 이미 더 선명하게 구워둔 건 그대로 (줄여 그리면 선명함)
     bakeS = S;
-    for (const n of nodes.values()) bakeNode(n, S);
-    for (const e of edges) if (e._lg) bakeEdge(e, S);
+    cancelIdle(bakeJob);
+    const items = [...[...nodes.values()].map((n) => () => bakeNode(n, S)), ...edges.filter((e) => e._lg).map((e) => () => bakeEdge(e, S))];
+    if (force) { items.forEach((f) => f()); return; }
+    const run = (dl) => {
+      const t0 = performance.now();
+      while (items.length && (dl?.timeRemaining ? dl.timeRemaining() > 2 : performance.now() - t0 < 6)) items.shift()();
+      if (items.length) bakeJob = onIdle(run); else requestRender();
+    };
+    bakeJob = onIdle(run);
   }
   let near = null; // 강조 중 이어진 인물
   function render() {
@@ -153,6 +166,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.x, dpr * view.y);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     // 선
     ctx.lineCap = 'butt';
     for (const e of edges) {
@@ -267,7 +281,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     }
     const tight = edges.some((e) => { if (!e._lg) return false; const a = nodes.get(e.from); const b = nodes.get(e.to); return Math.hypot(b.x - a.x, b.y - a.y) < needLen(e, a, b) - 8; });
     alpha = fresh ? 0.04 : Math.max(alpha, tight ? 0.8 : 0.25);
-    bakeS = 0; bakeAll();
+    bakeAll(true);
     render();
     kick();
   }
