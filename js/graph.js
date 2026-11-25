@@ -188,7 +188,7 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       const al = visibleAliases(p, page).map((a) => a.name).filter((x) => x !== p.name);
       let aliasT = null;
       if (al.length) {
-        aliasT = el('text', { y: 51, 'text-anchor': 'middle', 'font-size': 10.5, fill: '#6b5f55', class: 'halo' }, g);
+        aliasT = el('text', { y: 51, 'text-anchor': 'middle', 'font-size': 10.5, fill: '#6b5f55', class: 'halo gsub' }, g);
         aliasT.textContent = al.slice(0, 2).join(' · ') + (al.length > 2 ? ` +${al.length - 2}` : '');
       }
       // 이름표 크기 (겹침 방지용)
@@ -213,7 +213,8 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       e._line.setAttribute('opacity', on ? 1 : 0.1);
     }
     for (const n of nodes.values()) {
-      n._g.setAttribute('opacity', !focus || near.has(n.p.id) ? 1 : 0.22);
+      // 그룹 opacity는 폰에서 매 프레임 따로 합성해야 해서 무거움 → 원·글자에 각각 흐리게(class)
+      n._g.classList.toggle('dim', !!focus && !near.has(n.p.id));
       n._g.classList.toggle('focused', n.p.id === focus);
     }
     if (!noLabels) placeLabels();

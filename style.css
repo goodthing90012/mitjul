@@ -444,7 +444,7 @@ blockquote.shared { margin: 0 0 14px; font-family: var(--serif); font-size: 15px
 
 /* ===== 관계도 정리 · 선택 삭제 (v1.5.0) ===== */
 .gnode.focused circle:nth-child(2) { stroke: #2b2622; stroke-width: 4; }
-.gnode, .graph-box line { transition: opacity .2s; }
+.graph-box line, .gnode circle, .gnode text { transition: opacity .2s; }
 .graph-box.big svg { cursor: grab; }
 .sec { display: flex; align-items: center; gap: 8px; }
 .sec small { font-weight: 400; color: #9a8f84; font-size: 11.5px; }
@@ -561,9 +561,10 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .graph-box.searching .graph-tools { display: none; }
 .gsearch { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 3; }
 .gsearch[hidden] { display: none; }
-.gs-bar { display: flex; gap: 6px; }
-.gs-bar input { flex: 1; height: 42px; min-height: 42px; border-radius: 21px; padding: 0 16px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 4px 14px rgba(0,0,0,.12); font-size: 15px; }
-.gs-x { width: 42px; height: 42px; min-height: 42px; padding: 0; border-radius: 21px; border: 0; background: rgba(43,38,34,.85); color: var(--paper); font-size: 15px; flex: none; }
+.gs-bar { position: relative; }
+.gs-bar input { width: 100%; height: 44px; min-height: 44px; border-radius: 22px; padding: 0 48px 0 16px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 4px 14px rgba(0,0,0,.12); font-size: 15px; margin: 0; }
+/* ✕는 검색창 안 오른쪽 */
+.gs-x { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 17px; border: 0; background: rgba(43,38,34,.12); color: var(--ink); font-size: 14px; display: inline-flex; align-items: center; justify-content: center; }
 .gs-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .gs-item { min-height: 36px; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--line); background: #fffaf0; box-shadow: 0 2px 8px rgba(0,0,0,.1); font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
 .gs-item small { color: var(--muted); font-weight: 400; }
@@ -572,11 +573,16 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .gs-card:empty { display: none; }
 .gs-card { margin-top: 8px; }
 .gs-card .pcard { cursor: pointer; }
-/* 작은 관계도: 위에 늘 있는 검색칸 */
-.gsearch.inline { position: static; margin: 4px 0 8px; }
-.gsearch.inline .gs-bar input { box-shadow: none; height: 48px; min-height: 48px; border-radius: 14px; }
-.gsearch.inline .gs-x { height: 48px; min-height: 48px; width: 48px; border-radius: 14px; }
-.gsearch.inline .gs-x[hidden] { display: none; }
-.gsearch.inline .gs-list:empty { display: none; }
-.gsearch.inline .gs-item, .gsearch.inline .gs-hidden, .gsearch.inline .gs-none { box-shadow: none; }
-.gsearch.inline + .gs-card { margin: 0 0 8px; }
+/* 작은 관계도: 위에 늘 있는 검색칸 (한 줄 꽉 차게, 추천은 아래로) */
+.gsearch.gs-inline { position: static; display: block; width: 100%; margin: 4px 0 8px; }
+.gsearch.gs-inline .gs-bar input { box-shadow: none; height: 48px; min-height: 48px; border-radius: 14px; }
+.gsearch.gs-inline .gs-x[hidden] { display: none; }
+.gsearch.gs-inline .gs-list:empty { display: none; }
+.gsearch.gs-inline .gs-item, .gsearch.gs-inline .gs-hidden, .gsearch.gs-inline .gs-none { box-shadow: none; }
+.gsearch.gs-inline + .gs-card { margin: 0 0 8px; }
+/* 관계도 흐리게: 그룹 대신 원·글자에 (가볍게) */
+.gnode.dim circle, .gnode.dim text { opacity: .22; }
+/* 움직이는 동안 가볍게: 글자 테두리(halo)·작은 별칭 글자·흐린 인물 이름은 잠깐 생략 */
+.graph-box svg.anim .halo { stroke: none; }
+.graph-box svg.anim .gsub, .graph-box svg.anim .gnode.dim text { visibility: hidden; }
+.graph-box svg.anim line { shape-rendering: optimizeSpeed; }

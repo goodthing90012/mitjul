@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.21.1';
+const APP_VERSION = '1.21.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -915,7 +915,7 @@ function renderPeople() {
 function attachGraphSearch(box, getGraph, onChange, inline) {
   const btn = $('.gs-open', box);
   const panel = document.createElement('div');
-  panel.className = inline ? 'gsearch inline' : 'gsearch';
+  panel.className = inline ? 'gsearch gs-inline' : 'gsearch';
   panel.hidden = !inline;
   panel.innerHTML = `<div class="gs-bar"><input type="text" placeholder="이 이름 누구지? 애칭·호칭·성으로도 찾아요" autocomplete="off" enterkeyhint="search"><button type="button" class="gs-x" aria-label="지우기" ${inline ? 'hidden' : ''}>✕</button></div><div class="gs-list"></div>`;
   const card = document.createElement('div');
