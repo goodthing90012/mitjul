@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.21.2';
+const APP_VERSION = '1.22.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -851,7 +851,7 @@ function renderPeople() {
   body.innerHTML = `
     ${tools}
     ${chapterBar}
-    <div class="graph-box"><svg id="graphSvg"></svg><div class="graph-tools"><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
+    <div class="graph-box"><canvas id="graphSvg"></canvas><div class="graph-tools"><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
     <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
@@ -1028,7 +1028,7 @@ function graphSheet(maxP) {
   let g = null;
   const body = openSheet(`
     <h3>인물 관계도</h3>
-    <div class="graph-box big"><svg id="graphBig"></svg><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div></div>
+    <div class="graph-box big"><canvas id="graphBig"></canvas><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div></div>
     <p class="graph-tip">두 손가락으로 확대 · 빈 곳을 끌어 이동 · 톡 = 관계 보기, 한 번 더 = 편집 · 길게 눌러 끌기 = 잇기</p>
     <div class="slider">
       <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>

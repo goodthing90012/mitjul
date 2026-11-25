@@ -1,5 +1,4 @@
-// 인물 관계도: SVG + 간단한 힘 기반 배치, 쪽수 기준으로 보이는 정보 제한(스포일러 방지)
-const NS = 'http://www.w3.org/2000/svg';
+// 인물 관계도: 캔버스 + 간단한 힘 기반 배치, 쪽수 기준으로 보이는 정보 제한(스포일러 방지)
 const FAMILY_COLORS = ['#c8553d', '#3d7ec8', '#4f9d69', '#b0589e', '#d39b2a', '#5b6ccf', '#2a9d9d', '#8c6b4f', '#d0607e', '#6f8f2f'];
 
 export const REL_KINDS = {
@@ -32,12 +31,6 @@ export function marriedVisible(person, page) {
   return person.marriedFamily && (person.marriedPage || 0) <= page;
 }
 
-const el = (tag, attrs = {}, parent) => {
-  const e = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  parent?.appendChild(e);
-  return e;
-};
 
 // 관계도
 // - 인물 수와 화면 크기에 맞춰 간격을 정하고, 이름표끼리 겹치지 않게 밀어냄
@@ -54,7 +47,7 @@ function splitLabel(t) {
   const c = Math.ceil(mid); return [t.slice(0, c), t.slice(c)];
 }
 
-// cubic-bezier(.33, 0, .15, 1): 살며시 출발해서 길게 감속 (첫 프레임이 살짝 밀려도 튀어 보이지 않음)
+// cubic-bezier(.33, 0, .15, 1): 살며시 출발해서 길게 감속
 function ease(t) {
   const x1 = 0.33; const y1 = 0; const x2 = 0.15; const y2 = 1;
   const bx = (u) => 3 * x1 * u * (1 - u) ** 2 + 3 * x2 * u * u * (1 - u) + u ** 3;
@@ -64,42 +57,176 @@ function ease(t) {
   return by(u);
 }
 
-export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false } = {}) {
+/* 캔버스 관계도
+   - 인물(원·이름·별칭)과 관계 이름은 처음에 한 번 작은 그림(스프라이트)으로 구워두고, 매 프레임엔 붙이기만 함
+   - 확대 배율이 많이 바뀌면 멈춘 뒤에 그 배율로 다시 구워서 선명하게
+   - 그래서 끌기·확대·강조 애니메이션이 폰에서도 매끄러움 */
+export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
-  let raf = 0;
   let focus = null;
   let view = { k: 1, x: 0, y: 0 };
-  let K = 120; // 이상적인 간격
+  let K = 120;
   const NODE_R = 20;
-  const gView = el('g', {}, svg);
-  const gEdges = el('g', {}, gView);
-  const gNodes = el('g', {}, gView);
-  const gLabels = el('g', { class: 'glabels' }, gView);
-  const gTemp = el('g', { 'pointer-events': 'none' }, gView);
-  const tempLine = el('line', { stroke: '#c8553d', 'stroke-width': 3, 'stroke-dasharray': '6 5', 'stroke-linecap': 'round', visibility: 'hidden' }, gTemp);
-  const tempRing = el('circle', { r: 27, fill: 'none', stroke: '#c8553d', 'stroke-width': 3, visibility: 'hidden' }, gTemp);
-  const size = () => ({ w: svg.clientWidth || 360, h: svg.clientHeight || 300 });
-  const applyView = () => gView.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
-  // 확대·이동 중엔 svg 자체를 CSS로 움직이므로, 위치 계산은 움직이기 전 크기(r0)로
-  let gest = null;
-  const svgRect = () => (gest ? gest.r0 : svg.getBoundingClientRect());
-  const toLocal = (e) => {
-    const r = svgRect();
-    return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
+  const ctx = canvas.getContext('2d');
+  const font = (getComputedStyle(canvas).fontFamily || 'sans-serif');
+  const mctx = document.createElement('canvas').getContext('2d'); // 글자 폭 재기용
+  const measure = (text, px, weight) => { mctx.font = `${weight} ${px}px ${font}`; return mctx.measureText(text).width; };
+  let W = 360; let H = 300; let dpr = 1;
+  const size = () => ({ w: W, h: H });
+  const resize = () => {
+    const w = canvas.clientWidth || 360; const h = canvas.clientHeight || 300;
+    const d = Math.min(3, devicePixelRatio || 1);
+    if (w === W && h === H && d === dpr && canvas.width) return false;
+    W = w; H = h; dpr = d;
+    canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
+    return true;
   };
+  resize();
+  const ro = new ResizeObserver(() => { if (resize()) requestRender(); });
+  ro.observe(canvas);
+  const rect = () => canvas.getBoundingClientRect();
+  const toLocal = (e) => { const r = rect(); return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k }; };
 
-  function setData(people, relations, page) {
+  /* ---- 그리기 ---- */
+  let rq = 0;
+  const requestRender = () => { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); };
+  let bakeS = 0; // 스프라이트를 구운 배율 (그래프 1 = 픽셀 몇 개)
+  const wantS = () => { const s = Math.max(1, Math.min(6, view.k * dpr)); return Math.pow(2, Math.round(Math.log2(s) * 2) / 2); };
+  let labelFade = 1; // 관계 이름 투명도 (애니메이션 끝나면 0→1)
+  let temp = null;   // 잇기 중 임시 선 { from, x, y, target }
+  let page = 0;
+
+  function bakeNode(n, S) {
+    const p = n.p;
+    const married = marriedVisible(p, page);
+    const pad = 6;
+    const x0 = -n.bw / 2 - pad; const y0 = -NODE_R - pad;
+    const w = n.bw + pad * 2; const h = n.bh + pad * 2;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(w * S); c.height = Math.ceil(h * S);
+    const x = c.getContext('2d');
+    x.scale(S, S); x.translate(-x0, -y0);
+    x.beginPath(); x.arc(0, 0, NODE_R, 0, Math.PI * 2);
+    x.fillStyle = familyColor(p.family); x.fill();
+    x.lineWidth = married ? 5 : 2; x.strokeStyle = married ? familyColor(p.marriedFamily) : '#fffaf0'; x.stroke();
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.font = `700 14px ${font}`; x.fillStyle = '#fff';
+    x.fillText([...(p.name || '?')][0], 0, 1);
+    x.textBaseline = 'alphabetic';
+    x.lineJoin = 'round'; x.strokeStyle = '#f7f0e3'; x.lineWidth = 4;
+    x.font = `700 13px ${font}`;
+    x.strokeText(p.name, 0, 36); x.fillStyle = '#2b2622'; x.fillText(p.name, 0, 36);
+    if (n.alias) {
+      x.font = `400 10.5px ${font}`;
+      x.strokeText(n.alias, 0, 51); x.fillStyle = '#6b5f55'; x.fillText(n.alias, 0, 51);
+    }
+    n._spr = { c, x0, y0, w, h };
+  }
+  function bakeEdge(e, S) {
+    const tw = e._tw; const lh = labelH(e);
+    const w = tw + 14; const h = lh + 2;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(w * S); c.height = Math.ceil(h * S);
+    const x = c.getContext('2d');
+    x.scale(S, S); x.translate(w / 2, h / 2);
+    const rw = tw + 12;
+    x.beginPath();
+    x.roundRect ? x.roundRect(-rw / 2, -lh / 2, rw, lh, 6) : x.rect(-rw / 2, -lh / 2, rw, lh);
+    x.fillStyle = '#fffaf0'; x.fill();
+    x.lineWidth = 1; x.strokeStyle = e._k.color; x.stroke();
+    x.font = `600 11px ${font}`; x.fillStyle = e._k.color; x.textAlign = 'center'; x.textBaseline = 'middle';
+    e._rows.forEach((r, i) => x.fillText(r, 0, (i - (e._rows.length - 1) / 2) * 13 + 0.5));
+    e._spr = { c, w, h };
+  }
+  function bakeAll() {
+    const S = wantS();
+    if (S === bakeS) return;
+    bakeS = S;
+    for (const n of nodes.values()) bakeNode(n, S);
+    for (const e of edges) if (e._lg) bakeEdge(e, S);
+  }
+  let near = null; // 강조 중 이어진 인물
+  function render() {
+    resize();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.x, dpr * view.y);
+    // 선
+    ctx.lineCap = 'butt';
+    for (const e of edges) {
+      const a = nodes.get(e.from); const b = nodes.get(e.to);
+      ctx.globalAlpha = !focus || e.from === focus || e.to === focus ? 1 : 0.1;
+      ctx.strokeStyle = e._k.color; ctx.lineWidth = e._wid;
+      ctx.setLineDash(e._dash);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // 인물
+    for (const n of nodes.values()) {
+      if (!n._spr) continue;
+      ctx.globalAlpha = !focus || near?.has(n.p.id) ? 1 : 0.22;
+      const s = n._spr;
+      ctx.drawImage(s.c, n.x + s.x0, n.y + s.y0, s.w, s.h);
+      if (n.p.id === focus || n === temp?.from) {
+        ctx.globalAlpha = 1;
+        ctx.beginPath(); ctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2);
+        ctx.lineWidth = n === temp?.from ? 5 : 4; ctx.strokeStyle = n === temp?.from ? '#c8553d' : '#2b2622'; ctx.stroke();
+      }
+    }
+    // 관계 이름
+    if (labelFade > 0) {
+      ctx.globalAlpha = labelFade;
+      for (const e of edges) {
+        if (!e._lg || !e._vis || !e._spr) continue;
+        const { x, y } = labelPos(e);
+        const s = e._spr;
+        ctx.drawImage(s.c, x - s.w / 2, y - s.h / 2, s.w, s.h);
+      }
+    }
+    // 잇기 중 임시 선
+    if (temp) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#c8553d'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.setLineDash([6, 5]);
+      ctx.beginPath(); ctx.moveTo(temp.from.x, temp.from.y); ctx.lineTo(temp.x, temp.y); ctx.stroke();
+      ctx.setLineDash([]);
+      if (temp.target) { ctx.beginPath(); ctx.arc(temp.target.x, temp.target.y, 27, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    ctx.globalAlpha = 1;
+  }
+  const draw = requestRender;
+  function labelPos(e) {
+    const a = nodes.get(e.from); const b = nodes.get(e.to);
+    if (e._t == null) return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const f = e._from === b.p.id ? b : a; const o = f === a ? b : a;
+    return { x: f.x + (o.x - f.x) * e._t, y: f.y + (o.y - f.y) * e._t };
+  }
+  // 멈춘 뒤: 필요하면 지금 배율로 다시 굽고, 관계 이름을 살며시 보이기
+  let fadeAnim = 0;
+  function settled() {
+    bakeAll();
+    cancelAnimationFrame(fadeAnim);
+    const t0 = performance.now();
+    const step = (now) => {
+      labelFade = Math.min(1, (now - t0) / 200);
+      render();
+      if (labelFade < 1) fadeAnim = requestAnimationFrame(step);
+    };
+    fadeAnim = requestAnimationFrame(step);
+  }
+
+  /* ---- 데이터 ---- */
+  function setData(people, relations, pg) {
+    page = pg;
+    resize();
     const { w, h } = size();
     const vis = people.filter((p) => (p.firstPage || 0) <= page);
     const n = Math.max(vis.length, 1);
-    // 관계 이름이 선 위에 들어갈 만큼 간격 확보
     const avgLabel = relations.length ? relations.reduce((sum, r) => sum + Math.min(10, Math.ceil((r.label || '').length / ((r.label || '').length > 8 ? 2 : 1)) + 2), 0) / relations.length : 0;
     K = Math.max(GP.kmin, 55 + avgLabel * 12, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
     const next = new Map();
     let fresh = 0;
-    // 새 인물은 같은 가문 사람 근처, 없으면 원형으로 배치
     vis.forEach((p, i) => {
       const old = nodes.get(p.id);
       if (old) { next.set(p.id, Object.assign(old, { p })); return; }
@@ -112,22 +239,19 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
         : { p, x: w / 2 + Math.cos(ang) * R, y: h / 2 + Math.sin(ang) * R, vx: 0, vy: 0 });
     });
     nodes = next;
-    if (focus) { focus = null; saved = null; } // 데이터가 바뀌면 강조를 풀고 새로 배치
+    if (focus) { focus = null; saved = null; near = null; }
     const byPair = new Map();
     relations
       .filter((r) => (r.page || 0) <= page && nodes.has(r.from) && nodes.has(r.to))
       .forEach((r) => {
         const k = [r.from, r.to].sort().join('|');
         const cur = byPair.get(k);
-        // 같은 두 사람 사이에 관계가 여러 단계면 지금까지 드러난 것 중 가장 나중 것(장 → 쪽 순)
         const later = !cur || (r._seq != null && cur._seq != null ? r._seq > cur._seq
           : (r.chapter || 0) > (cur.chapter || 0) || ((r.chapter || 0) === (cur.chapter || 0) && (r.page || 0) >= (cur.page || 0)));
         if (later) byPair.set(k, r);
       });
-    // 관계 원본에 그림 요소를 붙이지 않게 복사본으로 (작은 관계도와 크게 보기가 같은 관계를 공유해서 선이 어긋나던 문제)
     edges = [...byPair.values()].map((r) => ({ ...r }));
-    build(page);
-    // 새로 생긴 게 많으면 미리 계산해서 정돈된 상태로 보여줌
+    build();
     if (fresh) {
       alpha = 1;
       for (let i = 0; i < 320; i++) tick();
@@ -141,133 +265,78 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       }
       fit(false);
     }
-    // 관계 이름이 길어져서(스포 관계가 열리는 등) 선이 짧으면 힘을 더 줘서 부드럽게 벌어지게
     const tight = edges.some((e) => { if (!e._lg) return false; const a = nodes.get(e.from); const b = nodes.get(e.to); return Math.hypot(b.x - a.x, b.y - a.y) < needLen(e, a, b) - 8; });
     alpha = fresh ? 0.04 : Math.max(alpha, tight ? 0.8 : 0.25);
-    draw();
+    bakeS = 0; bakeAll();
+    render();
     kick();
   }
 
-  function build(page) {
-    gEdges.textContent = '';
-    gNodes.textContent = '';
-    gLabels.textContent = '';
+  // 크기 재기 + 스타일 정하기 (그림은 bakeAll에서)
+  function build() {
     for (const e of edges) {
-      // 스포 관계: 종류 색도 힌트가 되니 회색 점선 + 🙈 (톡 하면 '이 일이 일어났어요')
-      const k = e.spoiler ? SPOILER_KIND : REL_KINDS[e.kind] || REL_KINDS.etc;
-      e._line = el('line', { stroke: k.color, 'stroke-width': !e.spoiler && (e.kind === 'family' || e.kind === 'love') ? 2.6 : 1.8, 'stroke-dasharray': k.dash }, gEdges);
-      e._lg = null;
+      e._k = e.spoiler ? SPOILER_KIND : REL_KINDS[e.kind] || REL_KINDS.etc;
+      e._wid = !e.spoiler && (e.kind === 'family' || e.kind === 'love') ? 2.6 : 1.8;
+      e._dash = e._k.dash ? e._k.dash.split(' ').map(Number) : [];
       if (e.spoiler) e.label = '🙈 ?';
-      if (e.label) {
-        const tap = e.spoiler && onSpoilerTap;
-        e._lg = el('g', { 'pointer-events': tap ? 'auto' : 'none', class: tap ? 'glabel-tap' : '' }, gLabels);
-        if (tap) {
-          // 폰에선 손가락이 살짝만 움직여도 pointerup이 안 올 수 있어서 click으로 (브라우저가 톡을 판정)
-          e._lg.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-          e._lg.addEventListener('pointerup', (ev) => ev.stopPropagation());
-          e._lg.addEventListener('click', (ev) => { ev.stopPropagation(); onSpoilerTap?.(e.id); });
-          e._hit = el('rect', { fill: 'transparent' }, e._lg); // 손가락으로 누르기 쉽게 넓은 영역
-        }
-        e._bg = el('rect', { rx: 6, fill: '#fffaf0', stroke: k.color, 'stroke-width': 1 }, e._lg);
-        e._tx = el('text', { 'font-size': 11, fill: k.color, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': 600 }, e._lg);
-        // 말줄임 없이 전부. 길면 띄어쓰기 기준으로 두 줄
+      e._lg = !!e.label;
+      if (e._lg) {
         e._rows = splitLabel(e.label);
-        e._ts = e._rows.map((r) => { const t = el('tspan', {}, e._tx); t.textContent = r; return t; });
+        e._tw = Math.max(...e._rows.map((r) => measure(r, 11, 600)));
       }
     }
     for (const n of nodes.values()) {
       const p = n.p;
-      const g = el('g', { class: 'gnode' }, gNodes);
-      const married = marriedVisible(p, page);
-      el('circle', { r: 30, fill: 'transparent' }, g);
-      el('circle', { r: NODE_R, fill: familyColor(p.family), stroke: married ? familyColor(p.marriedFamily) : '#fffaf0', 'stroke-width': married ? 5 : 2 }, g);
-      const ini = el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', 'font-size': 14, 'font-weight': 700 }, g);
-      ini.textContent = [...(p.name || '?')][0];
-      const name = el('text', { y: 36, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 700, fill: '#2b2622', class: 'halo' }, g);
-      name.textContent = p.name;
       const al = visibleAliases(p, page).map((a) => a.name).filter((x) => x !== p.name);
-      let aliasT = null;
-      if (al.length) {
-        aliasT = el('text', { y: 51, 'text-anchor': 'middle', 'font-size': 10.5, fill: '#6b5f55', class: 'halo gsub' }, g);
-        aliasT.textContent = al.slice(0, 2).join(' · ') + (al.length > 2 ? ` +${al.length - 2}` : '');
-      }
-      // 이름표 크기 (겹침 방지용)
-      const tw = Math.max(name.getComputedTextLength?.() || p.name.length * 13, aliasT?.getComputedTextLength?.() || 0);
+      n.alias = al.length ? al.slice(0, 2).join(' · ') + (al.length > 2 ? ` +${al.length - 2}` : '') : '';
+      const tw = Math.max(measure(p.name, 13, 700), n.alias ? measure(n.alias, 10.5, 400) : 0);
       n.bw = Math.max(46, tw + 10);
-      n.bh = aliasT ? 72 : 58;
-      n._g = g;
-      bindNode(n);
+      n.bh = n.alias ? 72 : 58;
     }
-    styleFocus();
+  }
+  function nearOf(id) {
+    const s = new Set([id]);
+    for (const e of edges) if (e.from === id || e.to === id) { s.add(e.from); s.add(e.to); }
+    return s;
   }
 
-  // 강조: 고른 인물과 이어진 것만 진하게. 관계 이름은 겹치지 않게 톡 한 인물의 것만 보여줌
-  function styleFocus(noLabels) {
-    const near = new Set();
-    if (focus) {
-      near.add(focus);
-      for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
-    }
-    for (const e of edges) {
-      const on = !focus || e.from === focus || e.to === focus;
-      e._line.setAttribute('opacity', on ? 1 : 0.1);
-    }
-    for (const n of nodes.values()) {
-      // 그룹 opacity는 폰에서 매 프레임 따로 합성해야 해서 무거움 → 원·글자에 각각 흐리게(class)
-      n._g.classList.toggle('dim', !!focus && !near.has(n.p.id));
-      n._g.classList.toggle('focused', n.p.id === focus);
-    }
-    if (!noLabels) placeLabels();
-  }
-
-  /* ---- 스포트라이트: 톡 한 인물을 가운데, 이어진 사람을 둥글게, 관계 이름은 선 위에 겹치지 않게 ---- */
-  let saved = null;   // 강조 전 자리 (풀면 되돌아감)
+  /* ---- 강조(스포트라이트) 애니메이션 ---- */
+  let saved = null;
   let tween = 0;
-  // 확대/이동은 svg 전체를 GPU로 늘였다 줄이는 방식(글자를 매 순간 다시 그리지 않음): 목표 화면을 먼저 적용해 두고
-  // CSS 변환으로 시작 화면에서 목표 화면까지 이어줌. 끝나면 변환을 지우고 선명하게 한 번 다시 그림
   let finishTween = null;
   function animateTo(targets, dur, viewTo, done) {
     finishTween?.(true);
-    cancelAnimationFrame(raf); raf = 0;
     cancelAnimationFrame(fitAnim); fitAnim = 0;
+    cancelAnimationFrame(fadeAnim);
     const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     const v0 = { ...view };
-    if (viewTo) { view = { ...viewTo }; applyView(); }
-    const css = (vi) => {
-      const sc = vi.k / view.k;
-      svg.style.transformOrigin = '0 0';
-      svg.style.transform = `translate3d(${vi.x - sc * view.x}px, ${vi.y - sc * view.y}px, 0) scale(${sc})`;
-    };
+    labelFade = 0;
     let t0 = 0;
-    gLabels.style.opacity = '0';
-    labelsOff = true;
-    svg.classList.add('anim');
-    svg.style.willChange = 'transform';
     const finish = (skip) => {
       cancelAnimationFrame(tween); tween = 0; finishTween = null;
-      if (skip) for (const [n, t] of targets) { n.x = t.x; n.y = t.y; }
-      if (viewTo) { svg.style.transform = ''; }
-      labelsOff = false; placeLabels(); draw();
-      svg.classList.remove('anim'); gLabels.style.opacity = '';
+      if (skip) {
+        for (const [n, t] of targets) { n.x = t.x; n.y = t.y; }
+        if (viewTo) view = { ...viewTo };
+      }
+      placeLabels();
+      settled();
       done?.();
     };
     finishTween = finish;
+    const { w, h } = size();
+    const c0 = { x: (w / 2 - v0.x) / v0.k, y: (h / 2 - v0.y) / v0.k };
+    const c1 = viewTo ? { x: (w / 2 - viewTo.x) / viewTo.k, y: (h / 2 - viewTo.y) / viewTo.k } : null;
     const step = (now) => {
       if (!t0) t0 = now;
       const p = Math.min(1, (now - t0) / dur);
-      const e = ease(p); // 살며시 출발 → 아주 천천히 멈춤
+      const e = ease(p);
       for (const [n, t] of targets) { const f = from.get(n); n.x = f.x + (t.x - f.x) * e; n.y = f.y + (t.y - f.y) * e; }
       if (viewTo) {
-        // 배율은 곱셈으로 이어야 확대·축소 속도가 고르게 느껴짐
         const k = v0.k * Math.pow(viewTo.k / v0.k, e);
-        // 화면 가운데 기준으로 같은 비율로 이동
-        const { w, h } = size();
-        const c0 = { x: (w / 2 - v0.x) / v0.k, y: (h / 2 - v0.y) / v0.k };
-        const c1 = { x: (w / 2 - viewTo.x) / viewTo.k, y: (h / 2 - viewTo.y) / viewTo.k };
         const cx = c0.x + (c1.x - c0.x) * e; const cy = c0.y + (c1.y - c0.y) * e;
-        css({ k, x: w / 2 - cx * k, y: h / 2 - cy * k });
+        view = { k, x: w / 2 - cx * k, y: h / 2 - cy * k };
       }
-      draw();
+      render();
       if (p < 1) tween = requestAnimationFrame(step);
       else finish(false);
     };
@@ -275,29 +344,27 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
   }
   function setFocus(id) {
     if (id === focus) return;
-    stopInertia(); commitGesture(); // 톡 직후 남은 이동 상태를 먼저 정리
+    stopInertia();
     if (!id) {
-      focus = null;
-      styleFocus(true); // 관계 이름 자리는 애니메이션 끝나고 한 번만
+      focus = null; near = null;
       if (saved) {
         const back = new Map([...nodes.values()].filter((n) => saved.has(n)).map((n) => [n, saved.get(n)]));
         saved = null;
         autoFit = true;
         animateTo(back, 900, fitTargetFor(back, null));
-      }
+      } else { placeLabels(); render(); }
       return;
     }
     if (!saved) saved = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     focus = id;
-    styleFocus(true); // 관계 이름 자리는 애니메이션 끝나고 한 번만
+    near = nearOf(id);
     const c = nodes.get(id);
     const center = saved.get(c);
     const mine = edges.filter((e) => e.from === id || e.to === id);
     const nbrs = [...new Set(mine.map((e) => (e.from === id ? e.to : e.from)))].map((x) => nodes.get(x));
-    // 지금 보이는 방향을 유지한 채 고르게 둥글게 배치
     nbrs.sort((a, b) => Math.atan2(saved.get(a).y - center.y, saved.get(a).x - center.x) - Math.atan2(saved.get(b).y - center.y, saved.get(b).x - center.x));
     const lw = Math.max(60, ...mine.map((e) => (e._lg ? labelW(e) : 0) + 16));
-    const ringByCount = (nbrs.length * Math.max(lw, 70)) / (2 * Math.PI) * 1.3; // 둘레에 이름·관계 이름이 들어갈 만큼
+    const ringByCount = (nbrs.length * Math.max(lw, 70)) / (2 * Math.PI) * 1.3;
     const R = Math.max(K * 1.4, 120, ringByCount);
     const a0 = nbrs.length ? Math.atan2(saved.get(nbrs[0]).y - center.y, saved.get(nbrs[0]).x - center.x) : 0;
     const targets = new Map();
@@ -306,7 +373,6 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       const a = a0 + (i / nbrs.length) * Math.PI * 2;
       targets.set(n, { x: center.x + Math.cos(a) * R, y: center.y + Math.sin(a) * R });
     });
-    // 나머지 인물은 바깥으로 밀어두기 (흐리게)
     for (const n of nodes.values()) {
       if (targets.has(n)) continue;
       const s0 = saved.get(n);
@@ -316,49 +382,24 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     }
     animateTo(targets, 900, fitTargetFor(targets, id));
   }
-  // 관계 이름은 항상 두 원 사이 선 위에. 원·이름표·다른 관계 이름과 겹치지 않는 자리를 선을 따라 찾고,
-  // 도저히 자리가 없으면 그 이름만 숨김(톡 하면 그 인물 중심으로 펼쳐져서 보임)
-  function labelW(e) {
-    if (e._tw) return e._tw;
-    let w = 0; for (const t of e._ts) w = Math.max(w, t.getComputedTextLength?.() || 0);
-    return (e._tw = w || Math.max(...e._rows.map((r) => r.length)) * 11);
-  }
-  // 관계 이름 + 양쪽 이름표가 겹치지 않으려면 필요한 선 길이
+
+  /* ---- 관계 이름 자리 ---- */
+  function labelW(e) { return e._tw || 0; }
   function needLen(e, a, b) { return labelW(e) + 14 + (a.bw + b.bw) / 2 + 16 + (e._extra || 0); }
   function labelH(e) { return e._rows.length > 1 ? 31 : 18; }
-  // 자리가 없어 숨은 관계 이름이 있으면 그 선만 조금 더 늘려달라고 표시 (최대 몇 번)
   function growHidden() {
     let grew = false;
     for (const e of edges) if (e._lg && !e._vis && (e._extra || 0) < 120) { e._extra = (e._extra || 0) + 30; grew = true; }
     return grew;
   }
-  // 미리 계산해서 숨은 이름이 다 들어가는 자리를 찾고, 그 자리로 부드럽게 옮김
-  function settleHidden() {
-    if (!growHidden()) return false;
-    const start = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
-    for (let round = 0; round < 4; round++) {
-      alpha = 0.3;
-      for (let i = 0; i < 60; i++) tick();
-      separate(30);
-      placeLabels();
-      if (!growHidden()) break;
-    }
-    alpha = 0;
-    const targets = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
-    for (const [n, p] of start) { n.x = p.x; n.y = p.y; }
-    animateTo(targets, 700, autoFit && !gest ? fitTargetFor(targets, null) : null);
-    return true;
-  }
   function placeLabels() {
     const boxes = [...nodes.values()].map((n) => ({ x0: n.x - n.bw / 2 - 2, x1: n.x + n.bw / 2 + 2, y0: n.y - NODE_R - 2, y1: n.y - NODE_R + n.bh }));
     const hit = (b) => boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
-    // 짧은 선부터 자리를 잡으면 긴 선에 여유가 생김
     const list = edges.filter((e) => e._lg && (!focus || e.from === focus || e.to === focus))
       .map((e) => { const a = nodes.get(e.from); const b = nodes.get(e.to); return { e, a, b, len: Math.hypot(b.x - a.x, b.y - a.y) }; })
       .sort((x, y) => x.len - y.len);
     for (const e of edges) if (e._lg) e._vis = false;
     for (const { e, a: a0, b: b0 } of list) {
-      // 강조 중이면 가운데 인물 쪽에서부터 재기
       const a = focus && e.to === focus ? b0 : a0; const b = focus && e.to === focus ? a0 : b0;
       const tw = labelW(e) + 14; const hh = labelH(e) / 2 + 2;
       for (const t of [0.5, 0.42, 0.58, 0.35, 0.65, 0.28, 0.72]) {
@@ -367,10 +408,9 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
         if (!hit(box)) { e._t = t; e._from = a.p.id; e._vis = true; boxes.push(box); break; }
       }
     }
-    for (const e of edges) if (e._lg) e._lg.setAttribute('visibility', e._vis ? 'visible' : 'hidden');
   }
 
-  /* ---- 노드 조작: 톡 = 강조/편집, 짧게 끌기 = 옮기기, 길게 눌러 끌기 = 잇기 ---- */
+  /* ---- 손가락 조작 (인물 / 빈 곳 / 관계 이름 모두 캔버스 하나에서 판정) ---- */
   function nodeAt(pt, except) {
     let best = null; let bd = 34;
     for (const m of nodes.values()) {
@@ -380,164 +420,151 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     }
     return best;
   }
-  let dragFrame = 0;
-  function bindNode(n) {
-    let start = null;
-    let moved = 0;
-    let timer = 0;
-    let linking = false;
-    let target = null;
-    const showTemp = (pt) => {
-      tempLine.setAttribute('x1', n.x); tempLine.setAttribute('y1', n.y);
-      tempLine.setAttribute('x2', pt.x); tempLine.setAttribute('y2', pt.y);
-      tempLine.setAttribute('visibility', 'visible');
-      target = nodeAt(pt, n);
-      if (target) { tempRing.setAttribute('cx', target.x); tempRing.setAttribute('cy', target.y); tempRing.setAttribute('visibility', 'visible'); }
-      else tempRing.setAttribute('visibility', 'hidden');
-    };
-    const hideTemp = () => { tempLine.setAttribute('visibility', 'hidden'); tempRing.setAttribute('visibility', 'hidden'); };
-    n._g.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      finishTween?.(true); // 움직이는 중이면 바로 끝내서 손가락 위치가 정확하게
-      n._g.setPointerCapture(e.pointerId);
-      const pt = toLocal(e);
-      start = { dx: n.x - pt.x, dy: n.y - pt.y, x: pt.x, y: pt.y };
-      moved = 0; linking = false; target = null;
-      n.fixed = true;
-      clearTimeout(timer);
-      if (onLink) {
-        timer = setTimeout(() => {
-          if (!start || moved > 6) return;
-          linking = true;
-          navigator.vibrate?.(25);
-          n._g.classList.add('linking');
-          showTemp({ x: start.x, y: start.y });
-        }, 380);
-      }
+  // 인물 누르기: 원 근처 또는 이름 글자 위
+  function nodeHit(pt) {
+    let best = null; let bd = Infinity;
+    for (const m of nodes.values()) {
+      const d = Math.hypot(m.x - pt.x, m.y - pt.y);
+      const onName = Math.abs(pt.x - m.x) < m.bw / 2 && pt.y > m.y && pt.y < m.y - NODE_R + m.bh;
+      if ((d < 30 || onName) && d < bd) { bd = d; best = m; }
+    }
+    return best;
+  }
+  function spoilerHit(pt) {
+    if (!onSpoilerTap) return null;
+    return edges.find((e) => {
+      if (!e.spoiler || !e._vis) return false;
+      const { x, y } = labelPos(e);
+      return Math.abs(pt.x - x) < labelW(e) / 2 + 18 && Math.abs(pt.y - y) < labelH(e) / 2 + 12;
     });
-    n._g.addEventListener('pointermove', (e) => {
-      if (!start) return;
-      const pt = toLocal(e);
-      if (linking) { showTemp(pt); return; }
-      const nx = pt.x + start.dx;
-      const ny = pt.y + start.dy;
-      moved += (Math.abs(nx - n.x) + Math.abs(ny - n.y)) * view.k;
-      if (moved < 6) return;
-      clearTimeout(timer);
-      n.x = nx; n.y = ny;
-      // 끄는 동안엔 잡은 인물만 손가락을 따라감 (나머지는 놓았을 때 부드럽게 정리)
-      if (!dragFrame) dragFrame = requestAnimationFrame(() => { dragFrame = 0; draw(); });
-    });
-    const up = (e) => {
-      if (!start) return;
-      e?.stopPropagation?.();
-      clearTimeout(timer);
-      start = null;
-      n.fixed = false;
-      n._g.classList.remove('linking');
-      if (linking) {
-        hideTemp();
-        linking = false;
-        if (target) onLink?.(n.p, target.p);
-        return;
-      }
-      if (moved < 6) {
-        if (focus === n.p.id) onNodeTap?.(n.p);
-        else setFocus(n.p.id);
-      } else if (!focus) {
-        // 놓은 자리는 그대로 두고 주변만 정리
-        n.fixed = true; alpha = 0.3; relax(550); n.fixed = false;
-      } else { placeLabels(); draw(); }
-    };
-    n._g.addEventListener('pointerup', up);
-    n._g.addEventListener('pointercancel', () => { clearTimeout(timer); start = null; n.fixed = false; linking = false; hideTemp(); n._g.classList.remove('linking'); });
   }
 
-  /* ---- 빈 곳: 톡 = 강조 풀기, 두 번 톡 = 인물 추가, (zoomable) 끌기 = 이동, 두 손가락 = 확대 ----
-     부드럽게: 움직이는 동안엔 svg 요소를 CSS transform으로만 옮기고(GPU), 손을 떼면 한 번에 반영.
-     놓을 때 속도가 있으면 미끄러지듯 멈추고(관성), 휠 확대는 목표 배율로 천천히 따라감 */
-  let frame = 0;
+  // 작은 관계도는 화면 스크롤(pan-y)이 되게 두되, 인물을 눌렀을 땐 스크롤 대신 인물을 끌 수 있게
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (nodeHit(toLocal(t))) e.preventDefault();
+  }, { passive: false });
+
+  let drag = null; // 인물 조작 { n, start, moved, timer, linking }
+  const nodeDown = (n, e) => {
+    const pt = toLocal(e);
+    drag = { n, dx: n.x - pt.x, dy: n.y - pt.y, sx: pt.x, sy: pt.y, moved: 0, linking: false, timer: 0, id: e.pointerId };
+    n.fixed = true;
+    if (onLink) {
+      drag.timer = setTimeout(() => {
+        if (!drag || drag.moved > 6) return;
+        drag.linking = true;
+        navigator.vibrate?.(25);
+        temp = { from: n, x: drag.sx, y: drag.sy, target: null };
+        render();
+      }, 380);
+    }
+  };
+  const nodeMove = (e) => {
+    const pt = toLocal(e);
+    const { n } = drag;
+    if (drag.linking) {
+      temp.x = pt.x; temp.y = pt.y; temp.target = nodeAt(pt, n);
+      requestRender();
+      return;
+    }
+    const nx = pt.x + drag.dx; const ny = pt.y + drag.dy;
+    drag.moved += (Math.abs(nx - n.x) + Math.abs(ny - n.y)) * view.k;
+    if (drag.moved < 6) return;
+    clearTimeout(drag.timer);
+    n.x = nx; n.y = ny;
+    requestRender();
+  };
+  const nodeUp = (cancel) => {
+    const d = drag; drag = null;
+    clearTimeout(d.timer);
+    d.n.fixed = false;
+    if (d.linking) {
+      const tgt = temp?.target;
+      temp = null; render();
+      if (!cancel && tgt) onLink?.(d.n.p, tgt.p);
+      return;
+    }
+    if (cancel) return;
+    if (d.moved < 6) {
+      if (focus === d.n.p.id) onNodeTap?.(d.n.p);
+      else setFocus(d.n.p.id);
+    } else if (!focus) {
+      d.n.fixed = true; alpha = 0.3; relax(550); d.n.fixed = false;
+    } else { placeLabels(); render(); }
+  };
+
   let inertia = 0;
   let wheelAnim = 0;
-  const beginGesture = () => {
-    finishTween?.(true);
-    cancelAnimationFrame(fitAnim);
-    autoFit = false;
-    if (gest) return;
-    gest = { v0: { ...view }, r0: svg.getBoundingClientRect() };
-  };
-  const renderGesture = () => {
-    if (frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      if (!gest) return;
-      const s0 = view.k / gest.v0.k;
-      svg.style.transform = `translate3d(${view.x - s0 * gest.v0.x}px, ${view.y - s0 * gest.v0.y}px, 0) scale(${s0})`;
-    });
-  };
-  const commitGesture = () => {
-    if (!gest) return;
-    cancelAnimationFrame(frame); frame = 0;
-    applyView();
-    svg.style.transform = '';
-    gest = null;
-  };
   const stopInertia = () => { cancelAnimationFrame(inertia); inertia = 0; };
   const clampK = (k) => Math.max(0.35, Math.min(3, k));
-
   const pts = new Map();
   let pan = null;
   let pinch = null;
   let lastTap = null;
   let bgMoved = 0;
   let vel = { x: 0, y: 0, t: 0 };
-  svg.addEventListener('pointerdown', (e) => {
-    if (e.target.closest?.('.gnode, .glabel-tap')) return;
+  let userMoved = false;
+  const beginView = () => { finishTween?.(true); cancelAnimationFrame(fitAnim); autoFit = false; userMoved = true; };
+  const endView = () => { if (userMoved) { userMoved = false; settled(); } };
+
+  canvas.addEventListener('pointerdown', (e) => {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    canvas.setPointerCapture(e.pointerId);
+    if (pts.size === 1) {
+      finishTween?.(true);
+      const pt = toLocal(e);
+      const sp = spoilerHit(pt);
+      if (sp) { drag = null; pan = null; pts.delete(e.pointerId); onSpoilerTap(sp.id); return; }
+      const n = nodeHit(pt);
+      if (n) { stopInertia(); nodeDown(n, e); return; }
+    }
+    // 두 번째 손가락이 오면 인물 조작은 그만두고 확대로
+    if (drag && pts.size >= 2) { nodeUp(true); }
     bgMoved = 0;
     if (!zoomable) return;
     stopInertia();
     cancelAnimationFrame(wheelAnim); wheelAnim = 0;
-    beginGesture();
-    svg.setPointerCapture(e.pointerId);
+    beginView();
     if (pts.size === 1) { pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; vel = { x: 0, y: 0, t: performance.now() }; }
     if (pts.size === 2) {
       const [a, b] = [...pts.values()];
-      const r = gest.r0;
+      const r = rect();
       const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
       pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: view.k, wx: (mx - view.x) / view.k, wy: (my - view.y) / view.k };
       pan = null;
     }
   });
-  svg.addEventListener('pointermove', (e) => {
+  canvas.addEventListener('pointermove', (e) => {
     if (!pts.has(e.pointerId)) return;
     const prev = pts.get(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (drag && drag.id === e.pointerId) { nodeMove(e); return; }
     bgMoved += Math.abs(e.clientX - prev.x) + Math.abs(e.clientY - prev.y);
-    if (!zoomable || !gest) return;
+    if (!zoomable) return;
     if (pinch && pts.size >= 2) {
       const [a, b] = [...pts.values()];
-      const r = gest.r0;
+      const r = rect();
       const mx = (a.x + b.x) / 2 - r.left; const my = (a.y + b.y) / 2 - r.top;
       view.k = clampK(pinch.k * (Math.hypot(a.x - b.x, a.y - b.y) / Math.max(pinch.d, 1)));
       view.x = mx - pinch.wx * view.k; view.y = my - pinch.wy * view.k;
     } else if (pan) {
       const now = performance.now();
       const dt = Math.max(1, now - vel.t);
-      // 놓을 때 관성용 속도 (부드럽게 평균)
       vel.x = 0.75 * ((e.clientX - prev.x) / dt) + 0.25 * vel.x;
       vel.y = 0.75 * ((e.clientY - prev.y) / dt) + 0.25 * vel.y;
       vel.t = now;
       view.x = pan.vx + (e.clientX - pan.x); view.y = pan.vy + (e.clientY - pan.y);
     }
-    renderGesture();
+    requestRender();
   });
-  const bgUp = (e) => {
+  const up = (e, cancel) => {
     if (!pts.has(e.pointerId)) return;
     pts.delete(e.pointerId);
+    if (drag && drag.id === e.pointerId) { nodeUp(cancel); return; }
     if (zoomable) {
       if (pts.size === 1 && pinch) {
-        // 두 손가락 중 하나만 떼면 남은 손가락으로 이어서 이동
         pinch = null;
         const [rest] = [...pts.values()];
         pan = { x: rest.x, y: rest.y, vx: view.x, vy: view.y };
@@ -548,22 +575,22 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
         pan = null; pinch = null;
         const idle = performance.now() - vel.t;
         let vx = idle > 80 ? 0 : vel.x; let vy = idle > 80 ? 0 : vel.y;
-        if (wasPan && Math.hypot(vx, vy) > 0.25) {
+        if (!cancel && wasPan && Math.hypot(vx, vy) > 0.25) {
           let last = performance.now();
           const step = (now) => {
             const dt = Math.min(40, now - last); last = now;
             view.x += vx * dt; view.y += vy * dt;
             const decay = Math.pow(0.9, dt / 16);
             vx *= decay; vy *= decay;
-            renderGesture();
+            render();
             if (Math.hypot(vx, vy) > 0.02) inertia = requestAnimationFrame(step);
-            else { inertia = 0; commitGesture(); }
+            else { inertia = 0; endView(); }
           };
           inertia = requestAnimationFrame(step);
-        } else commitGesture();
+        } else endView();
       }
     }
-    if (bgMoved > 8) return;
+    if (cancel || bgMoved > 8) return;
     const now = performance.now();
     const pt = { x: e.clientX, y: e.clientY };
     if (lastTap && now - lastTap.t < 350 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
@@ -574,33 +601,28 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
       if (focus) setFocus(null);
     }
   };
-  svg.addEventListener('pointerup', bgUp);
-  svg.addEventListener('pointercancel', (e) => {
-    pts.delete(e.pointerId);
-    if (pts.size === 0) { pan = null; pinch = null; if (!inertia) commitGesture(); }
-  });
+  canvas.addEventListener('pointerup', (e) => up(e, false));
+  canvas.addEventListener('pointercancel', (e) => up(e, true));
   if (zoomable) {
-    // 휠: 목표 배율로 부드럽게 따라가기
     let wheel = null;
-    svg.addEventListener('wheel', (e) => {
+    canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       stopInertia();
-      beginGesture();
-      const r = gest.r0;
+      beginView();
+      const r = rect();
       const mx = e.clientX - r.left; const my = e.clientY - r.top;
       if (!wheel) wheel = { k: view.k };
       wheel.k = clampK(wheel.k * Math.exp(-e.deltaY * 0.0015));
       wheel.mx = mx; wheel.my = my;
-      wheel.wx = (mx - view.x) / view.k; wheel.wy = (my - view.y) / view.k;
       if (wheelAnim) return;
       const step = () => {
         const nk = view.k + (wheel.k - view.k) * 0.25;
         const wx = (wheel.mx - view.x) / view.k; const wy = (wheel.my - view.y) / view.k;
         view.k = nk;
         view.x = wheel.mx - wx * nk; view.y = wheel.my - wy * nk;
-        renderGesture();
+        render();
         if (Math.abs(wheel.k - view.k) > 0.002) wheelAnim = requestAnimationFrame(step);
-        else { wheelAnim = 0; wheel = null; commitGesture(); }
+        else { wheelAnim = 0; wheel = null; endView(); }
       };
       wheelAnim = requestAnimationFrame(step);
     }, { passive: false });
@@ -697,20 +719,18 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     }
   }
 
-  // 전체가 화면에 들어오게 (인라인은 축소만, 크게 보기는 확대도)
+  // 전체가 화면에 들어오게 (작은 관계도는 축소만, 크게 보기는 확대도)
   function viewFor(x0, y0, x1, y1, w, h) {
     const pad = 14;
     const k = Math.max(0.35, Math.min(zoomable ? 1.6 : 1, (w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0)));
     return { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
   }
-  // 애니메이션이 끝났을 때의 자리로 미리 화면 맞춤 값을 계산 (이동과 확대를 한 번에)
   function fitTargetFor(targets, focusId) {
     const { w, h } = size();
-    let near = null;
-    if (focusId) { near = new Set([focusId]); for (const e of edges) if (e.from === focusId || e.to === focusId) { near.add(e.from); near.add(e.to); } }
+    const nr = focusId ? nearOf(focusId) : null;
     let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
     for (const n of nodes.values()) {
-      if (near && !near.has(n.p.id)) continue;
+      if (nr && !nr.has(n.p.id)) continue;
       const t = targets.get(n) || n;
       x0 = Math.min(x0, t.x - n.bw / 2); x1 = Math.max(x1, t.x + n.bw / 2);
       y0 = Math.min(y0, t.y - NODE_R - 4); y1 = Math.max(y1, t.y + n.bh - NODE_R);
@@ -718,65 +738,28 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     return viewFor(x0, y0, x1, y1, w, h);
   }
   let fitAnim = 0;
-  let autoFit = true; // 사용자가 직접 옮기거나 확대하기 전까지는 항상 전체가 보이게
+  let autoFit = true;
   function fit(animate = true) {
     if (!nodes.size) return;
     autoFit = !focus;
-    const { w, h } = size();
-    let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
-    // 강조 중이면 가운데 인물과 이어진 사람들만 화면에 맞춤
-    let list = [...nodes.values()];
-    if (focus) {
-      const near = new Set([focus]);
-      for (const e of edges) if (e.from === focus || e.to === focus) { near.add(e.from); near.add(e.to); }
-      list = list.filter((n) => near.has(n.p.id));
-    }
-    for (const n of list) {
-      x0 = Math.min(x0, n.x - n.bw / 2); x1 = Math.max(x1, n.x + n.bw / 2);
-      y0 = Math.min(y0, n.y - NODE_R - 4); y1 = Math.max(y1, n.y + n.bh - NODE_R);
-    }
-    const target = viewFor(x0, y0, x1, y1, w, h);
-    if (!animate) { view = target; applyView(); return; }
-    // svg 요소를 CSS로 줄이면 바깥이 잘려 보이므로, 맞추기 애니메이션은 안쪽 그룹만 움직임
+    const target = fitTargetFor(new Map(), focus);
+    if (!animate) { view = target; return; }
     stopInertia();
-    commitGesture();
     cancelAnimationFrame(fitAnim);
-    const from = { ...view }; const t0 = performance.now();
-    const step = () => {
-      const p = Math.min(1, (performance.now() - t0) / 320);
-      const e = 1 - Math.pow(1 - p, 3);
+    const from = { ...view }; let t0 = 0;
+    const step = (now) => {
+      if (!t0) t0 = now;
+      const p = Math.min(1, (now - t0) / 420);
+      const e = ease(p);
       view = { k: from.k + (target.k - from.k) * e, x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e };
-      applyView();
-      fitAnim = p < 1 ? requestAnimationFrame(step) : 0;
+      render();
+      if (p < 1) fitAnim = requestAnimationFrame(step);
+      else { fitAnim = 0; settled(); }
     };
-    step();
+    fitAnim = requestAnimationFrame(step);
   }
 
-  let labelsOff = false; // 애니메이션 중엔 관계 이름을 감추고 다시 그리지 않음
-  function draw() {
-    for (const e of edges) {
-      const a = nodes.get(e.from); const b = nodes.get(e.to);
-      e._line.setAttribute('x1', a.x); e._line.setAttribute('y1', a.y);
-      e._line.setAttribute('x2', b.x); e._line.setAttribute('y2', b.y);
-      if (e._lg && !labelsOff) {
-        let mx = (a.x + b.x) / 2; let my = (a.y + b.y) / 2;
-        if (e._t != null) {
-          const f = e._from === b.p.id ? b : a; const o = f === a ? b : a;
-          mx = f.x + (o.x - f.x) * e._t; my = f.y + (o.y - f.y) * e._t;
-        }
-        const tw = labelW(e); const lh = labelH(e);
-        e._tx.setAttribute('x', mx); e._tx.setAttribute('y', my);
-        e._ts.forEach((t, i) => { t.setAttribute('x', mx); t.setAttribute('y', my + (i - (e._ts.length - 1) / 2) * 13); });
-        e._bg.setAttribute('x', mx - tw / 2 - 6); e._bg.setAttribute('y', my - lh / 2);
-        e._bg.setAttribute('width', tw + 12); e._bg.setAttribute('height', lh);
-        if (e._hit) { e._hit.setAttribute('x', mx - tw / 2 - 18); e._hit.setAttribute('y', my - lh / 2 - 12); e._hit.setAttribute('width', tw + 36); e._hit.setAttribute('height', lh + 24); }
-      }
-    }
-    for (const n of nodes.values()) n._g.setAttribute('transform', `translate(${n.x},${n.y})`);
-  }
-
-  // 배치 바꾸기: 물리 계산을 화면 밖에서 끝까지 돌려 최종 자리를 구하고, 그 자리로 한 번에 미끄러지듯 이동
-  // (화면에서 꿈틀거리며 자리 잡는 모습 대신)
+  // 배치 바꾸기: 계산은 화면 밖에서 끝까지, 그 자리로 한 번에 미끄러지듯
   function relax(dur = 650) {
     const start = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     alpha = Math.max(alpha, 0.05);
@@ -793,23 +776,33 @@ export function createGraph(svg, { onNodeTap, onLink, onEmptyDoubleTap, onSpoile
     const targets = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     const moved = [...targets].some(([n, t]) => Math.hypot(t.x - start.get(n).x, t.y - start.get(n).y) > 0.5);
     for (const [n, p] of start) { n.x = p.x; n.y = p.y; }
-    const viewTo = autoFit && !gest ? fitTargetFor(targets, null) : null;
-    if (!moved) { for (const [n, t] of targets) { n.x = t.x; n.y = t.y; } placeLabels(); draw(); if (viewTo) fit(true); return; }
+    const viewTo = autoFit && !pts.size ? fitTargetFor(targets, null) : null;
+    if (!moved) {
+      for (const [n, t] of targets) { n.x = t.x; n.y = t.y; }
+      placeLabels();
+      if (viewTo) fit(true); else settled();
+      return;
+    }
     animateTo(targets, dur, viewTo);
   }
   function kick() {
     if (tween) return;
-    if (focus) { placeLabels(); draw(); return; } // 강조 중엔 배치를 흔들지 않음
+    if (focus) { placeLabels(); render(); return; }
     relax();
   }
 
-  svg.style.transformOrigin = '0 0'; svg.style.willChange = 'transform'; // 미리 GPU 층으로 (애니메이션·끌기 첫 프레임 끊김 방지)
-  applyView();
+  // 테스트·디버그용: 인물의 화면 위치
+  canvas._gdebug = () => ({ focus, view: { ...view }, nodes: [...nodes.values()].map((n) => ({ id: n.p.id, name: n.p.name, x: n.x * view.k + view.x, y: n.y * view.k + view.y })) });
   return {
     setData,
-    fit: () => { if (focus) setFocus(null); else fit(true); }, // 전체 보기 = 강조 풀고 전체 맞춤
-    focusOn: (id) => { if (nodes.has(id)) { if (focus === id) fit(true); else setFocus(id); return true; } return false; }, // 검색 결과로 이동
+    fit: () => { if (focus) setFocus(null); else fit(true); },
+    focusOn: (id) => { if (nodes.has(id)) { if (focus === id) fit(true); else setFocus(id); return true; } return false; },
     clearFocus: () => { if (focus) setFocus(null); },
-    destroy: () => { finishTween = null; cancelAnimationFrame(raf); cancelAnimationFrame(tween); cancelAnimationFrame(inertia); cancelAnimationFrame(wheelAnim); svg.style.transform = ''; svg.textContent = ''; },
+    destroy: () => {
+      finishTween = null;
+      ro.disconnect();
+      for (const f of [rq, tween, inertia, wheelAnim, fitAnim, fadeAnim]) cancelAnimationFrame(f);
+      ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
+    },
   };
 }
