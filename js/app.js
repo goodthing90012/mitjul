@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.23.0';
+const APP_VERSION = '1.22.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -851,7 +851,7 @@ function renderPeople() {
   body.innerHTML = `
     ${tools}
     ${chapterBar}
-    <div class="graph-box"><canvas id="graphSvg"></canvas><div class="graph-tools"><button class="graph-icon" id="graphReset" type="button" aria-label="자동 정리" title="자동 정리">↺</button><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
+    <div class="graph-box"><canvas id="graphSvg"></canvas><div class="graph-tools"><button class="graph-expand" id="graphExpand" type="button">⤢ 크게 보기</button></div></div>
     <p class="graph-tip"><b>톡</b> = 그 인물 중심으로 펼쳐 보기 (자리가 없어 숨은 관계 이름도 보여요) · <b>한 번 더 톡</b> = 편집 · <b>길게 눌러 끌기</b> = 잇기 · 빈 곳 <b>두 번 톡</b> = 인물 추가 · 사람이 많으면 <b>크게 보기</b>에서 확대해요</p>
     <div class="slider">
       <label><b>p.${page}</b>까지 보기 <small>그 뒤에 나오는 이름과 관계는 숨겨요</small></label>
@@ -877,10 +877,9 @@ function renderPeople() {
 
   state.graph?.destroy();
   bindTools();
-  state.graph = createGraph($('#graphSvg'), { ...graphHandlers(), layout: layoutStore() });
+  state.graph = createGraph($('#graphSvg'), graphHandlers());
   state.graph.setData(people, relations, page);
   $('#graphExpand').onclick = () => graphSheet(maxP);
-  $('#graphReset').onclick = () => resetLayoutAsk(() => state.graph);
   attachGraphSearch($('#graphSvg').parentElement, () => state.graph, null, true);
 
   const slider = $('#pageSlider');
@@ -1029,7 +1028,7 @@ function graphSheet(maxP) {
   let g = null;
   const body = openSheet(`
     <h3>인물 관계도</h3>
-    <div class="graph-box big"><canvas id="graphBig"></canvas><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-icon" id="graphReset2" type="button" aria-label="자동 정리" title="자동 정리">↺</button><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div></div>
+    <div class="graph-box big"><canvas id="graphBig"></canvas><div class="graph-tools"><button class="graph-icon gs-open" type="button" aria-label="관계도에서 찾기">${icon.search}</button><button class="graph-expand" id="graphFit" type="button">⤢ 전체 보기</button></div></div>
     <p class="graph-tip">두 손가락으로 확대 · 빈 곳을 끌어 이동 · 톡 = 관계 보기, 한 번 더 = 편집 · 길게 눌러 끌기 = 잇기</p>
     <div class="slider">
       <label><b id="bigLabel">p.${state.graphPage}</b>까지 보기</label>
@@ -1042,11 +1041,10 @@ function graphSheet(maxP) {
       $('#bigSpoil', body).innerHTML = spoilerBoxHtml();
       bindSpoilerBox($('#bigSpoil', body), refresh);
     };
-    g = createGraph($('#graphBig', body), { ...graphHandlers(refresh), zoomable: true, layout: layoutStore() });
+    g = createGraph($('#graphBig', body), { ...graphHandlers(refresh), zoomable: true });
     g.setData(people, relations, state.graphPage);
     bindSpoilerBox($('#bigSpoil', body), refresh);
     $('#graphFit', body).onclick = () => g.fit();
-    $('#graphReset2', body).onclick = () => resetLayoutAsk(() => g);
     attachGraphSearch($('#graphBig', body).parentElement, () => g, refresh);
   });
   const sl = $('#bigSlider', body);
@@ -1062,31 +1060,6 @@ function graphSheet(maxP) {
 function currentReadPage() {
   return state.graphPage != null && state.graphMax && state.graphPage < state.graphMax ? state.graphPage : 0;
 }
-// 관계도 배치 기억: 책에 저장(백업에도 포함). 작은 관계도와 크게 보기가 같은 배치를 씀
-let layoutTimer = 0;
-function layoutStore() {
-  const book = state.current.book;
-  return {
-    get: () => state.current?.book?.id === book.id ? state.current.book.layout || null : book.layout || null,
-    set: (L) => {
-      book.layout = L;
-      if (state.current?.book?.id === book.id) state.current.book.layout = L;
-      const sb = state.books.find((b) => b.id === book.id); if (sb) sb.layout = L; // 책장 순서 저장 등이 배치를 덮어쓰지 않게
-      clearTimeout(layoutTimer);
-      layoutTimer = setTimeout(async () => {
-        const fresh = await db.get('books', book.id); // 그사이 바뀐 다른 정보는 덮어쓰지 않게 최신 책에 배치만 넣기
-        if (fresh) await db.put('books', { ...fresh, layout: L });
-      }, 500);
-    },
-  };
-}
-function resetLayoutAsk(getGraph) {
-  const body = openSheet(`<h3>자동 정리</h3><p class="hint">직접 옮겨 둔 자리를 지우고 처음처럼 자동으로 다시 배치할까요?</p>
-    <div class="btn-row"><button class="ghost" id="rlNo" type="button">취소</button><button class="primary" id="rlYes" type="button">자동 정리</button></div>`);
-  $('#rlNo', body).onclick = () => closeTop();
-  $('#rlYes', body).onclick = async () => { await closeTop(); getGraph()?.resetLayout(); };
-}
-
 function graphHandlers(after) {
   return {
     onNodeTap: (p) => personSheet(p),

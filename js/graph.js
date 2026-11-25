@@ -57,14 +57,11 @@ function ease(t) {
   return by(u);
 }
 
-const onIdle = (f) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 200 }) : setTimeout(f, 16));
-const cancelIdle = (id) => (window.cancelIdleCallback ? cancelIdleCallback(id) : clearTimeout(id));
-
 /* 캔버스 관계도
    - 인물(원·이름·별칭)과 관계 이름은 처음에 한 번 작은 그림(스프라이트)으로 구워두고, 매 프레임엔 붙이기만 함
    - 확대 배율이 많이 바뀌면 멈춘 뒤에 그 배율로 다시 구워서 선명하게
    - 그래서 끌기·확대·강조 애니메이션이 폰에서도 매끄러움 */
-export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false, layout = null } = {}) {
+export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpoilerTap, zoomable = false } = {}) {
   let nodes = new Map();
   let edges = [];
   let alpha = 0;
@@ -72,13 +69,6 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
   let view = { k: 1, x: 0, y: 0 };
   let K = 120;
   const NODE_R = 20;
-  // 배치 기억: { 인물id: {x, y} }. 저장된 인물은 그 자리에 고정(pin)
-  const savePins = () => {
-    if (!layout) return;
-    const L = { ...(layout.get() || {}) };
-    for (const n of nodes.values()) if (n.pin) L[n.p.id] = { x: Math.round(n.x * 10) / 10, y: Math.round(n.y * 10) / 10 };
-    layout.set(L);
-  };
   const ctx = canvas.getContext('2d');
   const font = (getComputedStyle(canvas).fontFamily || 'sans-serif');
   const mctx = document.createElement('canvas').getContext('2d'); // 글자 폭 재기용
@@ -87,7 +77,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
   const size = () => ({ w: W, h: H });
   const resize = () => {
     const w = canvas.clientWidth || 360; const h = canvas.clientHeight || 300;
-    const d = Math.min(2, devicePixelRatio || 1); // 3배 화면도 2배로 (눈엔 거의 같고 그리는 양은 절반 가까이)
+    const d = Math.min(3, devicePixelRatio || 1);
     if (w === W && h === H && d === dpr && canvas.width) return false;
     W = w; H = h; dpr = d;
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
@@ -150,21 +140,12 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     e._rows.forEach((r, i) => x.fillText(r, 0, (i - (e._rows.length - 1) / 2) * 13 + 0.5));
     e._spr = { c, w, h };
   }
-  // force = 지금 바로 전부 (데이터가 바뀔 때). 아니면 배율이 바뀌었을 때만, 몇 개씩 나눠 쉬는 틈에 (끝날 때 멈칫 방지)
-  let bakeJob = 0;
-  function bakeAll(force) {
+  function bakeAll() {
     const S = wantS();
-    if (!force && S === bakeS) return;
+    if (S === bakeS) return;
     bakeS = S;
-    cancelIdle(bakeJob);
-    const items = [...[...nodes.values()].map((n) => () => bakeNode(n, S)), ...edges.filter((e) => e._lg).map((e) => () => bakeEdge(e, S))];
-    if (force) { items.forEach((f) => f()); return; }
-    const run = (dl) => {
-      const t0 = performance.now();
-      while (items.length && (dl?.timeRemaining ? dl.timeRemaining() > 2 : performance.now() - t0 < 6)) items.shift()();
-      if (items.length) bakeJob = onIdle(run); else requestRender();
-    };
-    bakeJob = onIdle(run);
+    for (const n of nodes.values()) bakeNode(n, S);
+    for (const e of edges) if (e._lg) bakeEdge(e, S);
   }
   let near = null; // 강조 중 이어진 인물
   function render() {
@@ -244,21 +225,13 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     const n = Math.max(vis.length, 1);
     const avgLabel = relations.length ? relations.reduce((sum, r) => sum + Math.min(10, Math.ceil((r.label || '').length / ((r.label || '').length > 8 ? 2 : 1)) + 2), 0) / relations.length : 0;
     K = Math.max(GP.kmin, 55 + avgLabel * 12, Math.min(GP.kmax, Math.sqrt((w * h) / n) * GP.kf));
-    // 강조 중이었다면 원래 자리로 먼저 돌려놓기
-    if (saved) for (const [n, q] of saved) { n.x = q.x; n.y = q.y; }
-    finishTween?.(true);
-    const L = layout?.get() || null;
     const next = new Map();
     let fresh = 0;
     vis.forEach((p, i) => {
       const old = nodes.get(p.id);
       if (old) { next.set(p.id, Object.assign(old, { p })); return; }
-      if (L?.[p.id]) { next.set(p.id, { p, x: L[p.id].x, y: L[p.id].y, vx: 0, vy: 0, pin: true }); return; }
       fresh++;
-      // 새 인물: 이어진 사람(관계) → 같은 가문 근처
-      const rel = relations.find((r) => (r.from === p.id && (next.has(r.to) || nodes.has(r.to))) || (r.to === p.id && (next.has(r.from) || nodes.has(r.from))));
-      const relId = rel ? (rel.from === p.id ? rel.to : rel.from) : null;
-      const kin = (relId && (next.get(relId) || nodes.get(relId))) || [...next.values(), ...nodes.values()].find((m) => m.p.family && m.p.family === p.family);
+      const kin = [...nodes.values()].find((m) => m.p.family && m.p.family === p.family);
       const ang = (i / n) * Math.PI * 2;
       const R = K * Math.sqrt(n) * 0.45;
       next.set(p.id, kin
@@ -280,10 +253,8 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     edges = [...byPair.values()].map((r) => ({ ...r }));
     build();
     if (fresh) {
-      // 고정된 인물은 그대로 두고 새 인물만 자리 잡기 (처음이거나 '자동 정리'면 전부)
-      const anyPin = [...nodes.values()].some((m) => m.pin);
       alpha = 1;
-      for (let i = 0; i < (anyPin ? 200 : 320); i++) tick();
+      for (let i = 0; i < 320; i++) tick();
       separate(80);
       placeLabels();
       for (let round = 0; round < 4 && growHidden(); round++) {
@@ -292,13 +263,11 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
         separate(40);
         placeLabels();
       }
-      for (const m of nodes.values()) m.pin = true;
-      savePins();
       fit(false);
-    } else placeLabels();
+    }
     const tight = edges.some((e) => { if (!e._lg) return false; const a = nodes.get(e.from); const b = nodes.get(e.to); return Math.hypot(b.x - a.x, b.y - a.y) < needLen(e, a, b) - 8; });
     alpha = fresh ? 0.04 : Math.max(alpha, tight ? 0.8 : 0.25);
-    bakeAll(true);
+    bakeS = 0; bakeAll();
     render();
     kick();
   }
@@ -522,23 +491,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
       if (focus === d.n.p.id) onNodeTap?.(d.n.p);
       else setFocus(d.n.p.id);
     } else if (!focus) {
-      // 놓은 자리에 고정. 다른 이름표와 겹치면 놓은 인물만 살짝 비킴, 나머지는 그대로
-      const n = d.n; const others = [...nodes.values()].filter((m) => m !== n);
-      for (let t = 0; t < 30; t++) {
-        let any = false;
-        for (const m of others) {
-          const dx = n.x - m.x; const dy = n.y - m.y;
-          const ox = (n.bw + m.bw) / 2 + 8 - Math.abs(dx); const oy = (n.bh + m.bh) / 2 + 4 - Math.abs(dy);
-          if (ox <= 0 || oy <= 0) continue;
-          any = true;
-          if (ox / (n.bw + m.bw) < oy / (n.bh + m.bh)) n.x += (dx >= 0 ? 1 : -1) * ox; else n.y += (dy >= 0 ? 1 : -1) * oy;
-        }
-        if (!any) break;
-      }
-      n.pin = true;
-      savePins();
-      placeLabels();
-      settled();
+      d.n.fixed = true; alpha = 0.3; relax(550); d.n.fixed = false;
     } else { placeLabels(); render(); }
   };
 
@@ -703,10 +656,10 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
         if (ox > 0 && oy > 0) {
           if (ox / (a.bw + b.bw) < oy / (a.bh + b.bh)) {
             const s = (dx >= 0 ? 1 : -1) * ox * 0.5;
-            if (!a.fixed && !a.pin) a.x -= s; if (!b.fixed && !b.pin) b.x += s;
+            if (!a.fixed) a.x -= s; if (!b.fixed) b.x += s;
           } else {
             const s = (dy >= 0 ? 1 : -1) * oy * 0.5;
-            if (!a.fixed && !a.pin) a.y -= s; if (!b.fixed && !b.pin) b.y += s;
+            if (!a.fixed) a.y -= s; if (!b.fixed) b.y += s;
           }
         }
       }
@@ -724,7 +677,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     for (const n of arr) {
       n.vx += (cx - n.x) * GP.grav * alpha;
       n.vy += (cy - n.y) * GP.grav * alpha;
-      if (n.fixed || n.pin) { n.vx = 0; n.vy = 0; continue; }
+      if (n.fixed) { n.vx = 0; n.vy = 0; continue; }
       n.vx *= 0.6; n.vy *= 0.6;
       const sp = Math.hypot(n.vx, n.vy);
       if (sp > 30) { n.vx *= 30 / sp; n.vy *= 30 / sp; }
@@ -739,9 +692,8 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
       if (d >= need) continue;
       const m = (need - d) * 0.2;
       const ux = dx / d; const uy = dy / d;
-      const fa = a.fixed || a.pin; const fb = b.fixed || b.pin;
-      if (!fa) { a.x -= ux * m * (fb ? 2 : 1); a.y -= uy * m * (fb ? 2 : 1); }
-      if (!fb) { b.x += ux * m * (fa ? 2 : 1); b.y += uy * m * (fa ? 2 : 1); }
+      if (!a.fixed) { a.x -= ux * m * (b.fixed ? 2 : 1); a.y -= uy * m * (b.fixed ? 2 : 1); }
+      if (!b.fixed) { b.x += ux * m * (a.fixed ? 2 : 1); b.y += uy * m * (a.fixed ? 2 : 1); }
     }
     alpha *= 0.985;
   }
@@ -758,13 +710,9 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
           const ox = (a.bw + b.bw) / 2 + 8 - Math.abs(dx);
           const oy = (a.bh + b.bh) / 2 + 4 - Math.abs(dy);
           if (ox <= 0 || oy <= 0) continue;
-          // 고정된 인물끼리는 그대로(직접 놓은 자리), 한쪽만 고정이면 다른 쪽이 다 비킴
-          const ma = !(a.pin || a.fixed); const mb = !(b.pin || b.fixed);
-          if (!ma && !mb) continue;
           any = true;
-          const wa = ma && mb ? 0.5 : ma ? 1 : 0; const wb = ma && mb ? 0.5 : mb ? 1 : 0;
-          if (ox / (a.bw + b.bw) < oy / (a.bh + b.bh)) { const s2 = (dx >= 0 ? 1 : -1) * ox; a.x -= s2 * wa; b.x += s2 * wb; }
-          else { const s2 = (dy >= 0 ? 1 : -1) * oy; a.y -= s2 * wa; b.y += s2 * wb; }
+          if (ox / (a.bw + b.bw) < oy / (a.bh + b.bh)) { const s2 = ((dx >= 0 ? 1 : -1) * ox) / 2; a.x -= s2; b.x += s2; }
+          else { const s2 = ((dy >= 0 ? 1 : -1) * oy) / 2; a.y -= s2; b.y += s2; }
         }
       }
       if (!any) break;
@@ -850,28 +798,6 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     fit: () => { if (focus) setFocus(null); else fit(true); },
     focusOn: (id) => { if (nodes.has(id)) { if (focus === id) fit(true); else setFocus(id); return true; } return false; },
     clearFocus: () => { if (focus) setFocus(null); },
-    // 자동 정리: 기억한 배치를 지우고 처음처럼 자동으로 다시 (부드럽게 이동)
-    resetLayout: () => {
-      if (focus) { for (const [n, q] of saved || []) { n.x = q.x; n.y = q.y; } focus = null; near = null; saved = null; }
-      layout?.set({});
-      for (const n of nodes.values()) { n.pin = false; n._extra = 0; }
-      for (const e of edges) e._extra = 0;
-      const start = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
-      const { w, h } = size();
-      const arr = [...nodes.values()];
-      arr.forEach((n, i) => { const a = (i / arr.length) * Math.PI * 2; const R = K * Math.sqrt(arr.length) * 0.45; n.x = w / 2 + Math.cos(a) * R; n.y = h / 2 + Math.sin(a) * R; n.vx = 0; n.vy = 0; });
-      alpha = 1;
-      for (let i = 0; i < 320; i++) tick();
-      separate(80);
-      placeLabels();
-      for (let round = 0; round < 4 && growHidden(); round++) { alpha = 0.5; for (let i = 0; i < 90; i++) tick(); separate(40); placeLabels(); }
-      alpha = 0;
-      const targets = new Map(arr.map((n) => [n, { x: n.x, y: n.y }]));
-      for (const [n, q] of start) { n.x = q.x; n.y = q.y; }
-      for (const n of arr) n.pin = true;
-      autoFit = true;
-      animateTo(targets, 800, fitTargetFor(targets, null), savePins);
-    },
     destroy: () => {
       finishTween = null;
       ro.disconnect();
