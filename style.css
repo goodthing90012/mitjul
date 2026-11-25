@@ -578,3 +578,4 @@ input, textarea, [contenteditable="true"], .selectable { -webkit-user-select: te
 .gsearch.gs-inline + .gs-card { margin: 0 0 8px; }
 /* 관계도 흐리게: 그룹 대신 원·글자에 (가볍게) */
 /* 움직이는 동안 가볍게: 글자 테두리(halo)·작은 별칭 글자·흐린 인물 이름은 잠깐 생략 */
+.graph-icon#graphReset, .graph-icon#graphReset2 { font-size: 18px; font-weight: 700; }
