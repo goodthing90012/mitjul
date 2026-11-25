@@ -95,9 +95,12 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
   /* ---- 그리기 ---- */
   let rq = 0;
   const requestRender = () => { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); };
-  let bakeS = 0; // 스프라이트를 구운 배율 (그래프 1 = 픽셀 몇 개)
+  // 이름표 그림은 배율 단계별(√2배 간격)로 여러 장 구워 두고, 지금 확대 정도에 가장 가까운(조금 큰) 걸 골라 그림
+  // → 크게 줄이거나 늘리지 않아서 선명하고 가벼움
+  const lvl = (s) => Math.max(-2, Math.min(6, Math.ceil(Math.log2(Math.max(0.3, s)) * 2))); // 단계 번호
+  const lvlS = (L) => Math.pow(2, L / 2);
+  let baked = new Set(); // 구워둔 단계들
   // 이름표는 항상 '확대된 모습' 기준(최소 1.6배)으로 구워둠 → 확대 애니메이션 중에도 흐려지지 않음 (작게 볼 땐 줄여서 그림)
-  const wantS = () => { const s = Math.max(1.6 * dpr, Math.min(6, view.k * dpr)); return Math.pow(2, Math.ceil(Math.log2(s) * 2) / 2); };
   let labelFade = 1; // 관계 이름 투명도 (애니메이션 끝나면 0→1)
   let temp = null;   // 잇기 중 임시 선 { from, x, y, target }
   let page = 0;
@@ -126,7 +129,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
       x.font = `400 10.5px ${font}`;
       x.strokeText(n.alias, 0, 51); x.fillStyle = '#6b5f55'; x.fillText(n.alias, 0, 51);
     }
-    n._spr = { c, x0, y0, w, h };
+    (n._sprs ||= {})[S] = { c, x0, y0, w, h };
   }
   function bakeEdge(e, S) {
     const tw = e._tw; const lh = labelH(e);
@@ -142,23 +145,48 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     x.lineWidth = 1; x.strokeStyle = e._k.color; x.stroke();
     x.font = `600 11px ${font}`; x.fillStyle = e._k.color; x.textAlign = 'center'; x.textBaseline = 'middle';
     e._rows.forEach((r, i) => x.fillText(r, 0, (i - (e._rows.length - 1) / 2) * 13 + 0.5));
-    e._spr = { c, w, h };
+    (e._sprs ||= {})[S] = { c, w, h };
   }
-  // force = 지금 바로 전부 (데이터가 바뀔 때). 아니면 더 크게 확대했을 때만, 몇 개씩 나눠 쉬는 틈에 (멈칫 방지)
+  // 단계 L을 (안 구웠으면) 굽기. now면 바로, 아니면 쉬는 틈에 몇 개씩
+  const queue = [];
   let bakeJob = 0;
-  function bakeAll(force) {
-    const S = wantS();
-    if (!force && S <= bakeS) return; // 이미 더 선명하게 구워둔 건 그대로 (줄여 그리면 선명함)
-    bakeS = S;
-    cancelIdle(bakeJob);
+  function ensure(L, now) {
+    if (baked.has(L)) return;
+    baked.add(L);
+    const S = lvlS(L);
     const items = [...[...nodes.values()].map((n) => () => bakeNode(n, S)), ...edges.filter((e) => e._lg).map((e) => () => bakeEdge(e, S))];
-    if (force) { items.forEach((f) => f()); return; }
-    const run = (dl) => {
-      const t0 = performance.now();
-      while (items.length && (dl?.timeRemaining ? dl.timeRemaining() > 2 : performance.now() - t0 < 6)) items.shift()();
-      if (items.length) bakeJob = onIdle(run); else requestRender();
-    };
-    bakeJob = onIdle(run);
+    if (now) { items.forEach((f) => f()); return; }
+    queue.push(...items);
+    if (!bakeJob) bakeJob = onIdle(run);
+  }
+  function run(dl) {
+    bakeJob = 0;
+    const t0 = performance.now();
+    while (queue.length && (dl?.timeRemaining ? dl.timeRemaining() > 2 : performance.now() - t0 < 6)) queue.shift()();
+    if (queue.length) bakeJob = onIdle(run); else requestRender();
+  }
+  function rebakeAll() {
+    cancelIdle(bakeJob); bakeJob = 0; queue.length = 0;
+    for (const n of nodes.values()) n._sprs = {};
+    for (const e of edges) e._sprs = {};
+    baked = new Set();
+    ensure(lvl(view.k * dpr), true);
+    ensure(lvl(1.6 * dpr)); // 확대 애니메이션용 큰 이름표는 쉬는 틈에 미리
+  }
+  // 멈췄을 때·애니메이션 시작 전: 지금 배율과 목표 배율 단계를 미리
+  function bakeAll(targetK) {
+    ensure(lvl(view.k * dpr));
+    if (targetK) ensure(lvl(targetK * dpr));
+  }
+  // 그릴 때 고르기: 필요한 배율 이상인 것 중 가장 작은 것, 없으면 가장 큰 것
+  function pick(sprs, need) {
+    let best = null; let bs = 0; let big = null; let bigS = 0;
+    for (const k in sprs) {
+      const S = +k;
+      if (S >= need * 0.85 && (!best || S < bs)) { best = sprs[k]; bs = S; }
+      if (S > bigS) { big = sprs[k]; bigS = S; }
+    }
+    return best || big;
   }
   let near = null; // 강조 중 이어진 인물
   function render() {
@@ -166,7 +194,9 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.x, dpr * view.y);
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'medium';
+    const need = view.k * dpr;
+    if (!tween && !pts.size && !baked.has(lvl(need))) bakeAll(); // 확대했으면 쉬는 틈에 그 배율로
     // 선
     ctx.lineCap = 'butt';
     for (const e of edges) {
@@ -179,9 +209,9 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     ctx.setLineDash([]);
     // 인물
     for (const n of nodes.values()) {
-      if (!n._spr) continue;
+      const s = n._sprs && pick(n._sprs, need);
+      if (!s) continue;
       ctx.globalAlpha = !focus || near?.has(n.p.id) ? 1 : 0.22;
-      const s = n._spr;
       ctx.drawImage(s.c, n.x + s.x0, n.y + s.y0, s.w, s.h);
       if (n.p.id === focus || n === temp?.from) {
         ctx.globalAlpha = 1;
@@ -193,9 +223,9 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     if (labelFade > 0) {
       ctx.globalAlpha = labelFade;
       for (const e of edges) {
-        if (!e._lg || !e._vis || !e._spr) continue;
+        const s = e._lg && e._vis && e._sprs && pick(e._sprs, need);
+        if (!s) continue;
         const { x, y } = labelPos(e);
-        const s = e._spr;
         ctx.drawImage(s.c, x - s.w / 2, y - s.h / 2, s.w, s.h);
       }
     }
@@ -281,7 +311,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     }
     const tight = edges.some((e) => { if (!e._lg) return false; const a = nodes.get(e.from); const b = nodes.get(e.to); return Math.hypot(b.x - a.x, b.y - a.y) < needLen(e, a, b) - 8; });
     alpha = fresh ? 0.04 : Math.max(alpha, tight ? 0.8 : 0.25);
-    bakeAll(true);
+    rebakeAll();
     render();
     kick();
   }
@@ -324,6 +354,7 @@ export function createGraph(canvas, { onNodeTap, onLink, onEmptyDoubleTap, onSpo
     cancelAnimationFrame(fadeAnim);
     const from = new Map([...nodes.values()].map((n) => [n, { x: n.x, y: n.y }]));
     const v0 = { ...view };
+    if (viewTo) bakeAll(viewTo.k); // 목표 배율 이름표는 쉬는 틈에 미리
     labelFade = 0;
     let t0 = 0;
     const finish = (skip) => {
