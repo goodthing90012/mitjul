@@ -7,7 +7,7 @@ import { createGraph, REL_KINDS, ALIAS_KINDS, familyColor, visibleAliases, marri
 import { Shelf, bookColor, colorOf } from './shelf3d.js';
 import { parseText, guessKind, ALIAS_WORDS } from './peopletext.js';
 
-const APP_VERSION = '1.23.2';
+const APP_VERSION = '1.23.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -934,10 +934,22 @@ function attachGraphSearch(box, getGraph, onChange, inline) {
     showCard(p, hit);
     if (!getGraph()?.focusOn(p.id)) toast('이 인물은 아직 관계가 없어서 관계도엔 안 보여요');
   };
+  // 아직 안 만난 인물도 이름 일부(2글자 이상)로 찾기. 스포 방지로 친 글자만 보이고 나머지는 ○로 가림
   const hiddenHits = (q) => {
     const nq = normalizeName(q);
     if (nq.length < 2) return [];
-    return (state.current.hiddenPeople || []).filter((p) => [p.name, ...(p.aliases || []).map((a) => a.name)].some((n) => { const x = normalizeName(n); return x === nq || x.split(' ').includes(nq) || (nq.length >= 3 && x.includes(nq)); }));
+    const out = [];
+    for (const p of state.current.hiddenPeople || []) {
+      for (const n of [p.name, ...(p.aliases || []).map((a) => a.name)]) {
+        if (!n) continue;
+        const i = n.toLowerCase().indexOf(nq);
+        if (i < 0) continue;
+        const masked = [...n].map((ch, k) => (k >= i && k < i + nq.length) || ch === ' ' ? ch : '○').join('');
+        out.push({ p, masked });
+        break;
+      }
+    }
+    return out.slice(0, 5);
   };
   const show = () => {
     const q = inp.value.trim();
@@ -945,7 +957,7 @@ function attachGraphSearch(box, getGraph, onChange, inline) {
     const hid = q ? hiddenHits(q) : [];
     list.innerHTML = q
       ? res.map(({ p, hit }, i) => `<button type="button" class="gs-item" data-i="${i}"><b>${esc(p.name)}</b>${hit && hit.kind !== '대표 이름' ? `<small>${esc(hit.name)} · ${esc(hit.kind)}</small>` : ''}</button>`).join('') +
-        hid.map((p) => `<div class="gs-hidden">‘${esc(q)}’은(는) 아직 안 만난 인물이에요 <button type="button" class="mini" data-reveal="${p.id}">만났어요</button></div>`).join('') ||
+        hid.map(({ p, masked }) => `<div class="gs-hidden"><b>${esc(masked)}</b> 아직 안 만난 인물 <button type="button" class="mini" data-reveal="${p.id}">만났어요</button></div>`).join('') ||
         '<div class="gs-none">이 쪽까지는 그런 이름이 없어요</div>'
       : '';
     $$('.gs-item', list).forEach((b) => (b.onclick = () => pick(res[+b.dataset.i])));
